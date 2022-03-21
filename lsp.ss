@@ -30,6 +30,7 @@
   (import
    (checkers)
    (chezscheme)
+   (cursor)
    (indent)
    (json)
    (keywords)
@@ -173,50 +174,62 @@
             (format "|~a|" s)))]
      [else x]))
 
-  (define (doc:start&link uri init-text progress)
-    (define-state-tuple <document> text worker-pid)
-    (define (init text)
+  (define (doc:start&link uri progress)
+    (define-state-tuple <document> cursor worker-pid)
+    (define (init)
       `#(ok ,(<document> make
-               [text text]
-               [worker-pid
-                (if text
-                    (start-check text #t)
-                    (start-update-refs progress))])))
+               [cursor #f]
+               [worker-pid #f])))
     (define (terminate reason state) 'ok)
     (define (handle-call msg from state)
       (match msg
         [get-text
-         `#(reply ,($state text) ,state)]
-        [#(get-value-near ,line ,char)
-         (let ([table (make-code-lookup-table ($state text))])
-           (match (try
-                   (let-values ([(type value bfp efp)
-                                 (read-token-near ($state text) table line char)])
-                     (and (eq? type 'atomic)
-                          (match value
-                            [,_ (guard (symbol? value))
-                             (get-symbol-name value)]
-                            [($primitive ,value)
-                             (get-symbol-name value)]
-                            [($primitive ,_ ,value)
-                             (get-symbol-name value)]
-                            [,_ #f]))))
-             [`(catch ,reason)
-              (trace-expr
-               `(get-value-near ,line ,char => ,(exit-reason->english reason)))
-              `#(reply #f ,state)]
-             ["" `#(reply #f ,state)]
-             [,result
-              `#(reply ,result ,state)]))]))
+         `#(reply ,(cursor->string ($state cursor)) ,state)]
+        [#(get-value-near ,line1 ,char1)
+         (trace-time `(get-value-near ,line1 ,char1)
+           (let* ([cursor (cursor:goto-line! ($state cursor) (fx- line1 1))]
+                  [text (line-str (cursor-line cursor))])
+             (match (try
+                     (let-values ([(type value bfp efp)
+                                   (read-token-near text char1)])
+                       (and (eq? type 'atomic)
+                            (match value
+                              [,_ (guard (symbol? value))
+                               (get-symbol-name value)]
+                              [($primitive ,value)
+                               (get-symbol-name value)]
+                              [($primitive ,_ ,value)
+                               (get-symbol-name value)]
+                              [,_ #f]))))
+               [`(catch ,reason)
+                (trace-expr
+                 `(get-value-near ,line1 ,char1 => ,(exit-reason->english reason)))
+                `#(reply #f ,state)]
+               ["" `#(reply #f ,state)]
+               [,result
+                `#(reply ,result ,state)])))]))
     (define (handle-cast msg state)
       (match msg
-        [#(updated ,text ,skip-delay?)
+        [#(updated ,change ,skip-delay?)
          (let ([pid ($state worker-pid)])
            (when pid (kill pid 'cancelled)))
          `#(no-reply
-            ,($state copy
-               [text text]
-               [worker-pid (start-check text skip-delay?)]))]))
+            ,(cond
+              [(not change)
+               ($state copy
+                 [cursor (string->cursor "")]
+                 [worker-pid (start-update-refs progress)])]
+              [(string? change)
+               (let ([cursor (string->cursor change)])
+                 ($state copy
+                   [cursor cursor]
+                   [worker-pid (start-check cursor skip-delay?)]))]
+              [else
+               (let ([cursor (lsp:change-content ($state cursor) change)])
+                 ($state copy
+                   [cursor cursor]
+                   [worker-pid (start-check cursor skip-delay?)]
+                   ))]))]))
     (define (handle-info msg state) (match msg))
 
     (define (publish-diagnostics)
@@ -225,17 +238,19 @@
          [uri uri]
          [diagnostics (current-diagnostics)])))
 
-    (define (start-check text skip-delay?)
-      (spawn
-       (lambda ()
-         (unless skip-delay?
-           (receive (after 1000 'ok)))
-         (check uri text)
-         (publish-diagnostics)
-         (unless skip-delay?
-           (receive (after 30000 'ok)))
-         (check-line-whitespace text #t report)
-         (publish-diagnostics))))
+    (define (start-check cursor skip-delay?)
+      (let ([cursor (cursor:copy cursor)])
+        (spawn
+         (lambda ()
+           (unless skip-delay?
+             (receive (after 1000 'ok)))
+           (let ([text (cursor->string cursor)])
+             (check uri text)
+             (publish-diagnostics)
+             (unless skip-delay?
+               (receive (after 30000 'ok)))
+             (check-line-whitespace text #t report)
+             (publish-diagnostics))))))
 
     (define (start-update-refs progress)
       (define pid
@@ -257,13 +272,13 @@
              (progress:inc-done progress)]))))
       pid)
 
-    (gen-server:start&link #f init-text))
+    (gen-server:start&link #f))
 
   (define (doc:get-text who)
     (gen-server:call who 'get-text))
 
-  (define (doc:get-value-near who line char)
-    (gen-server:call who `#(get-value-near ,line ,char)))
+  (define (doc:get-value-near who line1 char1)
+    (gen-server:call who `#(get-value-near ,line1 ,char1)))
 
   (define current-diagnostics (make-process-parameter '()))
 
@@ -553,18 +568,20 @@
         [req->pid (ht:delete req->pid id)]
         [pid->req (ht:delete pid->req pid)]))
 
-    (define (updated uri text skip-delay? progress state)
-      (cond
-       [(ht:ref ($state uri->doc) uri #f) =>
-        (lambda (doc)
-          (gen-server:cast doc `#(updated ,text ,skip-delay?))
-          state)]
-       [else
-        (match-let*
-         ([#(ok ,pid)
-           (watcher:start-child 'main-sup (gensym "document") 1000
-             (lambda () (doc:start&link uri text progress)))])
-         ($state copy* [uri->doc (ht:set uri->doc uri pid)]))]))
+    (define (updated uri change skip-delay? progress state)
+      (let-values ([(doc state)
+                    (cond
+                     [(ht:ref ($state uri->doc) uri #f) =>
+                      (lambda (doc) (values doc state))]
+                     [else
+                      (match-let*
+                       ([#(ok ,pid)
+                         (watcher:start-child 'main-sup (gensym "document") 1000
+                           (lambda () (doc:start&link uri progress)))])
+                       (values pid
+                         ($state copy* [uri->doc (ht:set uri->doc uri pid)])))])])
+        (gen-server:cast doc `#(updated ,change ,skip-delay?))
+        state))
 
     (define (do-handle-request id method params state)
       (match (try (handle-request id method params state))
@@ -602,7 +619,7 @@
                   [textDocumentSync
                    (json:make-object
                     [openClose #t]
-                    [change 1]          ; Full
+                    [change 2]          ; Incremental
                     [willSave #f]
                     [willSaveWaitUntil #f]
                     [save (json:make-object [includeText #t])])]
@@ -713,7 +730,7 @@
         ["textDocument/didChange"
          (updated
           (json:get params '(textDocument uri))
-          (json:get (car (last-pair (json:get params '(contentChanges)))) '(text))
+          (json:get params '(contentChanges))
           #f
           #f
           state)]

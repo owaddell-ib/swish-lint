@@ -120,12 +120,10 @@
         [(,_ ,msg . ,_) (values 1 msg)]
         [,_ (values 1 msg)])))
 
-  (define (read-token-near code table line char)
-    (let ([ip (open-input-string code)]
-          [start (line/char->fp table line 1)]
-          [fp (line/char->fp table line char)])
-      (set-port-position! ip start)
-      (let lp ([lt #f] [lv #f] [lb start] [le start])
+  (define (read-token-near str char1)
+    (let ([ip (open-input-string str)]
+          [fp (fx- char1 1)])
+      (let lp ([lt #f] [lv #f] [lb 0] [le 0])
         (let-values ([(type value bfp efp) (read-token ip)])
           (cond
            [(and (<= bfp fp) (< fp efp)) (values type value bfp efp)]
