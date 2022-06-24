@@ -23,7 +23,7 @@ test: all
 
 coverage: all
 	rm -f profile.data
-	swish-test --progress test --report mat-report.html --save-profile profile.data --coverage coverage.html .
+	swish-test --progress test --report mat-report.html --save-profile profile.data --coverage coverage.html --exclude 'testing/**' .
 
 lint: swish-lint${EXESUFFIX} ${SRC}
 	./swish-lint${EXESUFFIX} ${SRC}
