@@ -23,6 +23,7 @@
 (library (lsp)
   (export
    lsp:start-server
+   lsp:sup-spec
    )
   (import
    (checkers)
@@ -726,7 +727,30 @@
   (define (lsp-server:incoming-message msg)
     (gen-server:call 'lsp-server `#(incoming-message ,msg)))
 
-  (define (lsp:start-server)
+  (define (lsp:sup-spec ip op ignore-lhe?)
+    `(#(tower-client ,tower-client:start&link permanent 1000 worker)
+      #(tower-log
+        ,(lambda ()
+           (match (event-mgr:set-log-handler
+                   (lambda (e) (tower-client:log (coerce e)))
+                   (whereis 'tower-client))
+             [ok
+              (event-mgr:flush-buffer)
+              'ignore]
+             [,error
+              (if ignore-lhe?
+                  'ignore
+                  error)]))
+        temporary 1000 worker)
+      #(lsp-server ,lsp-server:start&link permanent 1000 worker)
+      #(lsp:writer
+        ,(lambda () (lsp:start-writer op))
+        permanent 1000 worker)
+      #(lsp:reader
+        ,(lambda () (lsp:start-reader ip lsp-server:incoming-message))
+        permanent 1000 worker)))
+
+  (define (lsp:start-server ip op)
     (hook-console-input)
     (trace-init)
     ;; Manually build the whole app-sup-spec. No real need to manage a
@@ -734,25 +758,7 @@
     (app-sup-spec
      `(#(event-mgr ,event-mgr:start&link permanent 1000 worker)
        #(gatekeeper ,gatekeeper:start&link permanent 1000 worker)
-       #(tower-client ,tower-client:start&link permanent 1000 worker)
-       #(tower-log
-         ,(lambda ()
-            (match (event-mgr:set-log-handler
-                    (lambda (e) (tower-client:log (coerce e)))
-                    (whereis 'tower-client))
-              [ok
-               (event-mgr:flush-buffer)
-               'ignore]
-              [,error error]))
-         temporary 1000 worker)
-       #(lsp-server ,lsp-server:start&link permanent 1000 worker)
-       #(lsp:writer
-         ,(lambda () (lsp:start-writer (console-output-port)))
-         permanent 1000 worker)
-       #(lsp:reader
-         ,(lambda () (lsp:start-reader (console-input-port)
-                       lsp-server:incoming-message))
-         permanent 1000 worker)
+       ,@(lsp:sup-spec ip op #f)
        #(event-mgr-sentry               ; Should be last
          ,(lambda ()
             `#(ok ,(spawn&link
