@@ -56,11 +56,13 @@
          (call-with-values
            (lambda () e1 e2 ...)
            (lambda result
-             (let ([end (erlang:now)])
-               (pretty-print `(time ,who ,(- end start) ms)
-                 (trace-output-port))
-               (newline (trace-output-port))
-               (flush-output-port (trace-output-port))
+             (let* ([end (erlang:now)]
+                    [dur (- end start)])
+               (when (> dur 20)
+                 (pretty-print `(time ,who ,dur ms)
+                   (trace-output-port))
+                 (newline (trace-output-port))
+                 (flush-output-port (trace-output-port)))
                (apply values result)))))]))
 
   (define (trace-versions)
