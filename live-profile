@@ -25,20 +25,38 @@
 ;;   foobar.ss. It might also be used for "actions", like "fix sort
 ;;   order of imports over this range".
 
-(import (indent))
+(define swish (osi_get_executable_path))
+(define swish-libdir (path-parent swish))
+(library-directories
+ (cons (path-combine swish-libdir "lib")
+   (library-directories)))
+
+(import (indent) (swish profile))
 
 (define cli
   (cli-specs
    default-help
    [import |-i| --import (string "<filename>") "import covout file"]
+   [scan-profile --scan (string "<filename>") "import profile data from experimental source-table profiling version of Swish"]
    [merge -m --merge bool "merge data into existing database"]
    [note -n --note (string "<note>") "metadata to attach to the import"]
    [srcdirs -s (list "<srcdir>") "add <srcdir> to source-directories"]
+   [db-file --db (string "<filename>") "live-profile database filename"]
    ))
 
 (define opt (parse-command-line-arguments cli))
 
-(define (import-coverage filename meta)
+(define (import-covout filename meta)
+  (define src-table (make-source-table))
+  (printf "importing...~a\n" filename)
+  (let ([ip (open-file-input-port filename
+              (file-options compressed)
+              (buffer-mode block)
+              (native-transcoder))])
+    (get-source-table! ip src-table))
+  (import-coverage src-table meta))
+
+(define (import-coverage src-table meta)
   (define sfd-sig
     (let ([ht (make-eq-hashtable)])
       (lambda (sfd)
@@ -75,15 +93,6 @@
                 #f]))])))
 
   (define sfd-table (make-hashtable sfd-sig-hash sfd-sig=?))
-
-  (define src-table (make-source-table))
-
-  (printf "importing...~a\n" filename)
-  (let ([ip (open-file-input-port filename
-              (file-options compressed)
-              (buffer-mode block)
-              (native-transcoder))])
-    (get-source-table! ip src-table))
 
   (for-each
    (lambda (p)
@@ -131,10 +140,12 @@
            count)))
      (source-table-dump src-table))))
 
-(define (build-database filename meta)
+(define db-file (or (opt 'db-file) "profile.db3"))
+
+(define (build-database merge? import! meta)
   (define (bool->db x)
     (if x 1 0))
-  (match-let* ([#(ok ,pid) (db:start&link 'db "profile.db3" 'create)])
+  (match-let* ([#(ok ,pid) (db:start&link 'db db-file 'create)])
     (unlink pid)
     (on-exit (db:stop pid)
       (transaction 'db
@@ -168,7 +179,7 @@
           [prop_string integer]
           [prop_comment integer])
 
-        (unless (opt 'merge)
+        (unless merge?
           (execute "drop table if exists dim_observation")
           (create-table dim_observation
             [obs_pk integer primary key]
@@ -215,7 +226,7 @@
             [rng_fk integer])
           ))
 
-      (import-coverage filename meta)
+      (import! meta)
 
       (transaction 'db
         (execute
@@ -343,10 +354,41 @@
  [(opt 'import) =>
   (lambda (filename)
     (time
-     (build-database filename
+     (build-database (opt 'merge)
+       ;; TODO fix goofy interface; trying to not change much code right now
+       (lambda (meta) (import-covout filename meta))
        (json:make-object
         [filename filename]
         [note (opt 'note)])))
+    (exit 0))]
+ [(opt 'scan-profile) =>
+  (lambda (profile)
+    (define merge? (opt 'merge))
+    (time
+     (profile:extract profile
+       (case-lambda
+        [(config)
+         (printf "ignoring config:\n")
+         (json:write (console-output-port) config 0)
+         (newline)]
+        [(md st)
+         (printf "source-table size ~s with meta data:\n" (source-table-size st))
+         (json:write (console-output-port) md 0)
+         (build-database merge?
+           (lambda (meta) (import-coverage st meta))
+           (json:make-object
+            [filename profile]
+            [note
+             (if (equal? (json:ref md '(data category) #f) "aced-mat")
+                 (format "~a ~5a ~a"
+                   (json:ref md 'timestamp #f)
+                   (json:ref md '(data point) #f)
+                   (json:ref md '(data id) #f))
+                 (or (json:ref md '(data category) #f)
+                     (json:ref md 'data #f)
+                     "???"))]))
+         (set! merge? #t) ;; merge the rest
+         (newline)])))
     (exit 0))])
 
 (define (scalar x)
@@ -877,7 +919,7 @@
 (log-file ":memory:")
 (app-sup-spec
  (append (app-sup-spec)
-   `(#(db ,(lambda () (db:start&link 'db "profile.db3" 'open))
+   `(#(db ,(lambda () (db:start&link 'db db-file 'open))
         permanent 1000 worker))))
 (app:start)
 (printf "Started at http://localhost:~a/\n" (http:get-port-number 'http))
