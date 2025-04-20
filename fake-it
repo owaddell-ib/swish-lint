@@ -1,0 +1,22 @@
+;; quick stupid hack to generate some data for trial
+(define (fake fn)
+  (define st (make-source-table))
+  ;; HACK assuming no cyclic #=0 stuff
+  (define n 0) ;; HACK some sort of data to display
+  (define (walk! x)
+    (cond
+     [(annotation? x)
+      (let ([src (annotation-source x)])
+        (when src
+          (let ([cell (source-table-cell st src '())])
+            (set-cdr! cell (cons n (cdr cell)))
+            (set! n (+ n 1))))
+        (walk! (annotation-expression x)))]
+     [(pair? x) (walk! (car x)) (walk! (cdr x))]
+     [(vector? x) (vector-for-each walk! x)]))
+  (walk! (read-bytevector fn (read-file fn)))
+  (let ([op (open-binary-file-to-replace "/tmp/fake.fasl")])
+    (on-exit (close-port op)
+      (fasl-write (source-table-dump st) op))))
+
+(fake "./fake-it")
