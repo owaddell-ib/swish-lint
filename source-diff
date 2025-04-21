@@ -7,11 +7,18 @@
 (define swish-libdir (path-parent swish))
 (library-directories
  (cons (path-combine swish-libdir "lib")
-   (library-directories)))
+   (cons (path-parent (app:path))
+     (library-directories))))
+
+(source-directories
+ (cons "~/projects/swish/src" ;; for hack-record-types.ss
+   (source-directories)))
 
 (import
  (indent) ;; for tokenize
  (swish profile))
+
+(include "hack-record-types.ss")
 
 (define cli
   (cli-specs
@@ -27,15 +34,7 @@
 (define opt (parse-command-line-arguments cli))
 (define db-file (or (opt 'db-file) "source-diff.db3"))
 
-(define (import-info info-file meta)
-  (define source-cell*
-    (let ([ip (open-binary-file-to-read info-file)])
-      (on-exit (close-port ip)
-        (let snag ([ls '()])
-          (match (fasl-read ip)
-            [#!eof ls]
-            [#(<sm> ,_ ,_ ,cell*) (snag (append cell* ls))]
-            [,x (guard (list? x)) (snag (append x ls))])))))
+(define (import-info meta source-cell*)
 
   (define sfd-sig
     (let ([ht (make-eq-hashtable)])
@@ -335,12 +334,33 @@
  [(opt 'import) =>
   (lambda (filename)
     (time
-     (build-database (opt 'merge)
-       ;; TODO fix goofy interface; trying to not change much code right now
-       (lambda (meta) (import-info filename meta))
-       (json:make-object
-        [filename filename]
-        [note (opt 'note)])))
+     (match-let*
+      ([#(<sm> ,st-dump ,prim* ,node* ,rubbish)
+        (let ([ip (open-binary-file-to-read filename)])
+          (on-exit (close-port ip)
+            (fasl-read ip)))])
+      ;; HACK in an adapter
+      (define st (make-source-table))
+      (vector-for-each
+       (lambda (node)
+         (when (identifier-info? node) ;; TODO oh boy
+           ;; BARF not even close to what we actually want
+           (let ([def (identifier-info-def node)])
+             (when def
+               (let ([cell (source-table-cell st def '())])
+                 (set-cdr! cell
+                   (cons (format "~s refs; ~s sets"
+                           (length (identifier-info-ref* node))
+                           (length (identifier-info-set* node)))
+                     (cdr cell))))))))
+       node*)
+      (build-database (opt 'merge)
+        ;; TODO fix goofy interface; trying to not change much code right now
+        (lambda (meta)
+          (import-info meta (source-table-dump st)))
+        (json:make-object
+         [filename filename]
+         [note (opt 'note)]))))
     (exit 0))])
 
 (define (scalar x)
@@ -568,7 +588,8 @@
                      (lp))))
 
                 (define max-count 0) ;;; TODO still need to work through all this
-                (define (color-class c m) (format "c~a" m)) ;;; HACK
+                (define (color-class c m)
+                  (format "c~a" (random 10))) ;;; HACK
                 (define (start-color-span count)
                   (fprintf op "<span title=\"~:d\" class=\"~a\">"
                     count
