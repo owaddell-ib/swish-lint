@@ -639,6 +639,16 @@
                   "    console.log('something went wrong with fetch:', error);"
                   "  }"
                   "};"
+                  "function updateLegend(info) {"
+                  "  const legend = document.getElementById('legend');"
+                  "  if (!legend) return;"
+                  "  var items = { refs: [], sets: [], binding: [] };"
+                  "  info.forEach(ls => ls.forEach(si => (si.refs || []).forEach(src => { if (!src.bfp) return; items.refs.push(src); }) ))"
+                  "  info.forEach(ls => ls.forEach(si => (si.sets || []).forEach(src => { if (!src.bfp) return; items.sets.push(src); }) ))"
+                  "  info.forEach(ls => ls.forEach(si => { if (si.binding) items.binding.push(si.binding); }));"
+                  "  console.log(JSON.stringify(items, null, 2));"
+                  "  legend.textContent = JSON.stringify(items, null, 2);"
+                  "}"
                   "function handleMouseOver(event) {"
                   "  const info = infoDictionary[event.target.id];"
                   "  document.querySelectorAll('.highlight').forEach(x => x.classList.remove('highlight'));"
@@ -650,9 +660,8 @@
                   "  event.target.classList.add('highlight');"
                   "  showInfo(event.target.id, info);"
                   "  const pretty = JSON.stringify(info, null, 2);"
-                  "  const legend = document.getElementById('legend');"
-                  "  if (!legend) return;"
-                  "  legend.textContent = pretty;"
+                  "  // console.log(pretty);"
+                  "  updateLegend(info);"
                   "}"
                   "document.addEventListener('DOMContentLoaded', fetchData);"
                   "document.addEventListener('DOMContentLoaded', () => {"
@@ -807,8 +816,8 @@
            (fprintf op "BODY { font-family: monospace; background-color: ~a; color: ~a; }\n" bg fg)
            (fprintf op "table.code { padding:0; border-spacing:0; }\n")
            (fprintf op "table.code td { padding-top:0; padding-bottom:0; }\n")
-           ;; TODO for some reason whatever font I was getting in Firefox by default had really whacky spacing
-           (fprintf op "pre { font-family: \"Deja Vu Sans Mono\"; }\n")
+           ;; TODO for some reason whatever font I was getting in Firefox by default had really whacky white space size; maybe since fixed
+           (fprintf op "// pre { font-family: \"Deja Vu Sans Mono\", Menlo; }\n")
            (fprintf op
              (ct:join " "
                "table.code td:nth-child(1) {"
@@ -824,10 +833,10 @@
            (fprintf op ".navigation { position:sticky; top:0; background-color:~a; }\n" bg)
            (fprintf op ".legend { position:sticky; top:0; float:right; text-align:right; width: 30em; }\n")
            ;; TODO negative margin is a hack to compensate for border
-           (fprintf op ".highlight { background: yellow; border: solid 1px black; margin: -1px; }\n")
+           (fprintf op ".highlight { background: rgba(255, 255, 0, 0.25); border: solid 1px black; margin: -1px; }\n")
            (fprintf op ".highlightbinding { background: yellow; border: solid 1px green; margin: -1px; }\n")
-           (fprintf op ".highlightrefs { background: yellow; border: solid 1px blue; margin: -1px; }\n")
-           (fprintf op ".highlightsets { background: yellow; border: solid 1px red; margin: -1px; }\n")
+           (fprintf op ".highlightrefs { background: rgba(255, 255, 0, 0.25); border: solid 1px blue; margin: -1px; }\n")
+           (fprintf op ".highlightsets { background: rgba(255, 255, 0, 0.25); border: solid 1px red; margin: -1px; }\n")
            (fprintf op ".cov_low { color: #FF0000; }\n")
            (fprintf op ".cov_medium { color: #FF8800; }\n")
            (fprintf op ".cov_high { color: #007F00; }\n")
