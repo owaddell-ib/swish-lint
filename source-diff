@@ -82,7 +82,7 @@
             [sfd (source-object-sfd so)])
        (hashtable-set! sfd-table sfd (source-file-descriptor-checksum sfd))))
    source-cell*)
-  (for-each
+  (vector-for-each
    (lambda (p)
      (match p
        [(,orig-filename ,abs-filename ,checksum)
@@ -96,13 +96,12 @@
           checksum
           (load-code abs-filename checksum))]))
    (let-values ([(keys vals) (hashtable-entries sfd-table)])
-     (vector->list
-      (vector-map
-       (lambda (sfd cs)
-         (list (source-file-descriptor-path sfd)
-           (sfd-source-path sfd values)
-           cs))
-       keys vals))))
+     (vector-map
+      (lambda (sfd cs)
+        (list (source-file-descriptor-path sfd)
+          (sfd-source-path sfd values)
+          cs))
+      keys vals)))
 
   (let ([meta (json:object->string meta)])
     (for-each
@@ -114,7 +113,7 @@
            (ct:join " "
              "insert into stage_profile"
              "(meta,checksum,bfp,efp,info)"
-             "values (?,?,?,?,?)")
+             "values (?,?,?,?,json(?))")
            meta
            (source-file-descriptor-checksum sfd)
            (source-object-bfp so)
@@ -320,6 +319,21 @@
         (execute "drop table stage_token"))
       )))
 
+(define (sfd->json sfd)
+  (json:make-object
+   [crc (source-file-descriptor-checksum sfd)]
+   [path (source-file-descriptor-path sfd)]))
+
+(define (maybe-source->json x)
+  (cond
+   [(source-object? x)
+    (json:make-object
+     [bfp (source-object-bfp x)]
+     [efp (source-object-efp x)]
+     [sfd (sfd->json (source-object-sfd x))])]
+   [(not x) #f]
+   [else (json:make-object [not-source (format "~s" x)])]))
+
 (cond
  [(opt 'help)
   (display-help (app:name) cli (opt))
@@ -343,16 +357,19 @@
       (define st (make-source-table))
       (vector-for-each
        (lambda (node)
-         (when (identifier-info? node) ;; TODO oh boy
+         (cond
+          [(identifier-info? node) ;; TODO oh boy
            ;; BARF not even close to what we actually want
            (let ([def (identifier-info-def node)])
              (when def
                (let ([cell (source-table-cell st def '())])
                  (set-cdr! cell
-                   (cons (format "~s refs; ~s sets"
-                           (length (identifier-info-ref* node))
-                           (length (identifier-info-set* node)))
-                     (cdr cell))))))))
+                   (cons
+                    (json:make-object
+                     [refs (map maybe-source->json (identifier-info-ref* node))]
+                     [sets (map maybe-source->json (identifier-info-set* node))])
+                    (cdr cell))))))]
+          [else (printf "some other node: ~s\n" node)]))
        node*)
       (build-database (opt 'merge)
         ;; TODO fix goofy interface; trying to not change much code right now
@@ -505,6 +522,39 @@
                           "order by src_filename")
                         (template obs))
                        obs))))))))))]
+     [/get_data
+      (http:url-handler
+       (let ([src (arg->integer (http:get-param 'src params))]
+             [obs (obs->list (http:find-param 'obs params))]
+             [cm (or (http:find-param 'cm params) "default")])
+         (match (transaction 'db
+                  (execute "select src_filename from dim_source where src_pk=?" src))
+           [() (not-found conn)]
+           [(#(,filename))
+            (define data
+              (transaction 'db
+                (apply execute
+                  (format
+                   (ct:join " "
+                     "select rng_bfp, json_group_array(json(fp.info))"
+                     "from fact_profile fp"
+                     "inner join dim_range on rng_pk=fp.rng_fk"
+                     "where fp.src_fk=?"
+                     "and fp.obs_fk in (~a)"
+                     "group by rng_bfp, rng_efp"
+                     "order by rng_bfp")
+                   (template obs))
+                  src
+                  obs)))
+            (http:respond conn 200 '(("Content-Type" . "text/html"))
+              (json:object->bytevector
+               (let ([obj (json:make-object)])
+                 (for-each
+                  (lambda (row)
+                    (match-let* ([#(,bfp ,json-txt) row])
+                      (json:set! obj (string->symbol (format "bfp~a" bfp)) (json:string->object json-txt))))
+                  data)
+                 obj)))])))]
      [/source
       (http:url-handler
        (let ([src (arg->integer (http:get-param 'src params))]
@@ -515,22 +565,22 @@
            [() (not-found conn)]
            [(#(,filename ,code))
             ;; Fancy
-            (let ([ip (open-bytevector-input-port code (make-utf8-transcoder))]
-                  [data
-                   (transaction 'db
-                     (apply execute
-                       (format
-                        (ct:join " "
-                          "select distinct rng_bfp, rng_efp"
-                          "from fact_profile"
-                          "inner join dim_range on rng_pk=rng_fk"
-                          "where src_fk=?"
-                          "and obs_fk in (~a)"
-                          "group by rng_bfp, rng_efp"
-                          "order by rng_bfp")
-                        (template obs))
-                       src
-                       obs))])
+            (define ip (open-bytevector-input-port code (make-utf8-transcoder)))
+            (define data
+              (transaction 'db
+                (apply execute ;; data
+                               (format
+                                (ct:join " "
+                                  "select distinct rng_bfp, rng_efp"
+                                  "from fact_profile"
+                                  "inner join dim_range on rng_pk=rng_fk"
+                                  "where src_fk=?"
+                                  "and obs_fk in (~a)"
+                                  "group by rng_bfp, rng_efp"
+                                  "order by rng_bfp")
+                                (template obs))
+                               src
+                               obs)))
               (define-values (op get) (open-bytevector-output-port (make-utf8-transcoder)))
               (define (get-bfp row) (vector-ref row 0))
               (define (get-efp row) (vector-ref row 1))
@@ -544,6 +594,32 @@
                   "<meta charset=\"UTF-8\">"
                   "<title>~a</title>"
                   "<link type=\"text/css\" rel=\"stylesheet\" href=\"style.css?cm=~a\">"
+                  "<script>"
+                  "var infoDictionary = {};"
+                  "async function fetchData() {"
+                  "  try {"
+                  (format "  const reply = await fetch('/get_data?obs=~{~a~^,~}&src=~a');" obs src)
+                  "    if (!reply.ok) { throw new Error('reply was not okay'); }"
+                  "    infoDictionary = await reply.json();"
+                  "  } catch (error) {"
+                  "    console.log('something went wrong with fetch:', error);"
+                  "  }"
+                  "};"
+                  "function handleMouseOver(event) {"
+                  "  const info = infoDictionary[event.target.id];"
+                  "  document.querySelectorAll('.highlight').forEach(x => x.classList.remove('highlight'));"
+                  "  if (!info) { legend.textContent = ''; return; }"
+                  "  event.target.classList.add('highlight');"
+                  "  const pretty = JSON.stringify(info, null, 2);"
+                  "  console.log(pretty);"
+                  "  const legend = document.getElementById('legend');"
+                  "  legend.textContent = pretty;"
+                  "}"
+                  "document.addEventListener('DOMContentLoaded', fetchData);"
+                  "document.addEventListener('DOMContentLoaded', () => {"
+                  "  document.querySelectorAll('span').forEach(span => span.addEventListener('mouseover', handleMouseOver));"
+                  "});"
+                  "</script>"
                   "</head>")
                 (html:encode filename)
                 (html:encode cm))
@@ -552,11 +628,11 @@
                   "<body>"
                   "~a"
                   "<h1>~a</h1>"
+                  "<div id=\"legend\" class=\"legend\"></div>"
                   "<pre>")
                 (html->string (navigation-panel "/source" src obs cm))
                 (html:encode filename))
               (let ()
-                (define (get-count row) 0) ;; HACK
                 (define get-next
                   (generator
                    (let lp ([fp 0] [line 1] [ls data] [stack '()] [start-of-line? #t])
@@ -567,7 +643,7 @@
                          (lp fp line ls (cdr stack) start-of-line?))]
                       [(and (pair? ls) (let ([row (car ls)]) (and (= (get-bfp row) fp) row))) =>
                        (lambda (row)
-                         (yield `#(push-count ,(get-count row)))
+                         (yield `#(push-count ,fp)) ;; TODO really regions now
                          (lp fp line (cdr ls) (cons row stack) start-of-line?))]
                       [else
                        (let ([c (read-char ip)])
@@ -587,15 +663,13 @@
                      (yield (eof-object))
                      (lp))))
 
-                (define max-count 0) ;;; TODO still need to work through all this
                 (define (color-class c m)
                   (format "c~a" (random 10))) ;;; HACK
-                (define (start-color-span count)
-                  (fprintf op "<span title=\"~:d\" class=\"~a\">"
-                    count
-                    (color-class count max-count)))
+                (define (start-span counts)
+                  (fprintf op "<span id=\"bfp~a\" class=\"~{c~a~^ ~}\">" (car counts) counts))
 
                 (fprintf op "<table class=\"code\">\n")
+                ;; TODO counts is really classes now
                 (let lp ([counts '()] [leading? #t])
                   (match (get-next)
                     [#!eof (void)]
@@ -604,11 +678,12 @@
                        (fprintf op "</span>"))
                      (let ([counts (cdr counts)])
                        (when (pair? counts)
-                         (start-color-span (car counts)))
+                         (start-span counts))
                        (lp counts leading?))]
-                    [#(push-count ,count)
-                     (start-color-span count)
-                     (lp (cons count counts) leading?)]
+                    [#(push-count ,fp)
+                     (let ([counts (cons fp counts)])
+                       (start-span counts)
+                       (lp counts leading?))]
                     [#(line ,line)
                      (fprintf op "<tr><td>~a</td><td id=\"L~a\">" line line)
                      (lp counts leading?)]
@@ -623,7 +698,7 @@
                      (lp counts leading?)]
                     [,c
                      (when (and leading? (pair? counts))
-                       (start-color-span (car counts)))
+                       (start-span counts))
                      (html:encode op (format "~a" c))
                      (lp counts #f)]))
                 (fprintf op "</table>\n"))
@@ -634,7 +709,7 @@
                   "</body>"
                   "</html>"))
 
-              (http:respond conn 200 '(("Content-Type" . "text/html")) (get)))])))]
+              (http:respond conn 200 '(("Content-Type" . "text/html")) (get))])))]
      [/style.css
       (http:url-handler
        (let ([cm (or (http:find-param 'cm params) "default")])
@@ -708,7 +783,8 @@
                "user-select: none;"
                "}\n"))
            (fprintf op ".navigation { position:sticky; top:0; background-color:~a; }\n" bg)
-           (fprintf op ".legend { position:sticky; top:0; float:right; text-align:right; }\n")
+           (fprintf op ".legend { position:sticky; top:0; float:right; text-align:right; width: 30em; }\n")
+           (fprintf op ".highlight { background: yellow; }\n")
            (fprintf op ".cov_low { color: #FF0000; }\n")
            (fprintf op ".cov_medium { color: #FF8800; }\n")
            (fprintf op ".cov_high { color: #007F00; }\n")
@@ -749,7 +825,7 @@
       [else
        (not-found conn)]))))
 
-(log-file ":memory:")
+(log-file "/tmp/DEBUG.db3" #; ":memory:")
 (app-sup-spec
  (append (app-sup-spec)
    `(#(db ,(lambda () (db:start&link 'db db-file 'open))
