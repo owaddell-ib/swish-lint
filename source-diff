@@ -368,10 +368,10 @@
           [(identifier-info? node) ;; TODO oh boy
            ;; BARF not even close to what we actually want
            (let ([def (identifier-info-def node)])
-             (when def ;; lexical binding with source
+             (for-each (add-binding def) (identifier-info-ref* node))
+             (for-each (add-binding def) (identifier-info-set* node))
+             (when def
                (let ([cell (source-table-cell st def '())])
-                 (for-each (add-binding def) (identifier-info-ref* node))
-                 (for-each (add-binding def) (identifier-info-set* node))
                  (set-cdr! cell
                    (cons
                     (json:make-object
