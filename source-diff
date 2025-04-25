@@ -355,6 +355,13 @@
             (fasl-read ip)))])
       ;; HACK in an adapter
       (define st (make-source-table))
+      (define (add-binding ref-src)
+        (define binding (json:make-object [binding (maybe-source->json ref-src)]))
+        (lambda (use-src)
+          (when (source-object? use-src)
+            (let ([cell (source-table-cell st use-src '())])
+              (set-cdr! cell
+                (cons binding (cdr cell)))))))
       (vector-for-each
        (lambda (node)
          (cond
@@ -363,6 +370,8 @@
            (let ([def (identifier-info-def node)])
              (when def
                (let ([cell (source-table-cell st def '())])
+                 (for-each (add-binding def) (identifier-info-ref* node))
+                 (for-each (add-binding def) (identifier-info-set* node))
                  (set-cdr! cell
                    (cons
                     (json:make-object
@@ -561,41 +570,66 @@
              [obs (obs->list (http:find-param 'obs params))]
              [cm (or (http:find-param 'cm params) "default")])
          (match (transaction 'db
-                  (execute "select src_filename, src_code from dim_source where src_pk=?" src))
+                  (execute "select src_filename, src_code, src_checksum from dim_source where src_pk=?" src))
            [() (not-found conn)]
-           [(#(,filename ,code))
+           [(#(,filename ,code, checksum))
             ;; Fancy
             (define ip (open-bytevector-input-port code (make-utf8-transcoder)))
             (define data
               (transaction 'db
-                (apply execute ;; data
-                               (format
-                                (ct:join " "
-                                  "select distinct rng_bfp, rng_efp"
-                                  "from fact_profile"
-                                  "inner join dim_range on rng_pk=rng_fk"
-                                  "where src_fk=?"
-                                  "and obs_fk in (~a)"
-                                  "group by rng_bfp, rng_efp"
-                                  "order by rng_bfp")
-                                (template obs))
-                               src
-                               obs)))
+                (apply execute
+                  (format
+                   (ct:join " "
+                     "select distinct rng_bfp, rng_efp"
+                     "from fact_profile"
+                     "inner join dim_range on rng_pk=rng_fk"
+                     "where src_fk=?"
+                     "and obs_fk in (~a)"
+                     "group by rng_bfp, rng_efp"
+                     "order by rng_bfp")
+                   (template obs))
+                  src
+                  obs)))
               (define-values (op get) (open-bytevector-output-port (make-utf8-transcoder)))
               (define (get-bfp row) (vector-ref row 0))
               (define (get-efp row) (vector-ref row 1))
               (define (get-info row) (vector-ref row 2))
 
               (fprintf op
-                (ct:join ""
+                (ct:join #\newline
                   "<!DOCTYPE html>"
                   "<html>"
                   "<head>"
                   "<meta charset=\"UTF-8\">"
                   "<title>~a</title>"
                   "<link type=\"text/css\" rel=\"stylesheet\" href=\"style.css?cm=~a\">"
+                  ;; TODO this is clearly not the way to include scripts
                   "<script>"
                   "var infoDictionary = {};"
+                  (format "const myFilename = '~a';" filename)
+                  (format "const myChecksum = '~a';" checksum)
+                  "function showSource(field) {"
+                  "  return src => {"
+                  "    if (!src) return;"
+                  "    if (!src.bfp) return;"
+                  "    if (src.sfd.crc != myChecksum && src.sfd.path != myFilename) {"
+                  "       console.log('different file:', src.sfd);"  ;; TODO  handle this
+                  "       return;"
+                  "    }"
+                  "    const elt = document.getElementById('bfp'+src.bfp);"
+                  "    if (elt) { elt.classList.add('highlight' + field); }"
+                  "  }"
+                  "}"
+                  "function showSourceFor(si, field) {"
+                  "  if (!si) return;"
+                  "  const srcs = si[field];"
+                  "  if (!srcs) return;"
+                  "  srcs.forEach(showSource(field));"
+                  "}"
+                  "function showInfo(id, info) {"
+                  "  info.forEach(ls => ls.forEach(si => { showSourceFor(si, 'refs'); showSourceFor(si, 'sets'); }));"
+                  "  info.forEach(ls => ls.forEach(si => { if (si.binding) { console.log('here with', si);  showSource('binding')(si.binding) } }));"
+                  "}"
                   "async function fetchData() {"
                   "  try {"
                   (format "  const reply = await fetch('/get_data?obs=~{~a~^,~}&src=~a');" obs src)
@@ -608,11 +642,16 @@
                   "function handleMouseOver(event) {"
                   "  const info = infoDictionary[event.target.id];"
                   "  document.querySelectorAll('.highlight').forEach(x => x.classList.remove('highlight'));"
+                  ;; TODO horrible
+                  "  document.querySelectorAll('.highlightrefs').forEach(x => x.classList.remove('highlightrefs'));"
+                  "  document.querySelectorAll('.highlightsets').forEach(x => x.classList.remove('highlightsets'));"
+                  "  document.querySelectorAll('.highlightbinding').forEach(x => x.classList.remove('highlightbinding'));"
                   "  if (!info) { legend.textContent = ''; return; }"
                   "  event.target.classList.add('highlight');"
+                  "  showInfo(event.target.id, info);"
                   "  const pretty = JSON.stringify(info, null, 2);"
-                  "  console.log(pretty);"
                   "  const legend = document.getElementById('legend');"
+                  "  if (!legend) return;"
                   "  legend.textContent = pretty;"
                   "}"
                   "document.addEventListener('DOMContentLoaded', fetchData);"
@@ -784,7 +823,11 @@
                "}\n"))
            (fprintf op ".navigation { position:sticky; top:0; background-color:~a; }\n" bg)
            (fprintf op ".legend { position:sticky; top:0; float:right; text-align:right; width: 30em; }\n")
-           (fprintf op ".highlight { background: yellow; }\n")
+           ;; TODO negative margin is a hack to compensate for border
+           (fprintf op ".highlight { background: yellow; border: solid 1px black; margin: -1px; }\n")
+           (fprintf op ".highlightbinding { background: yellow; border: solid 1px green; margin: -1px; }\n")
+           (fprintf op ".highlightrefs { background: yellow; border: solid 1px blue; margin: -1px; }\n")
+           (fprintf op ".highlightsets { background: yellow; border: solid 1px red; margin: -1px; }\n")
            (fprintf op ".cov_low { color: #FF0000; }\n")
            (fprintf op ".cov_medium { color: #FF8800; }\n")
            (fprintf op ".cov_high { color: #007F00; }\n")
