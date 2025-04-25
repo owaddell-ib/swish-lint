@@ -368,13 +368,14 @@
           [(identifier-info? node) ;; TODO oh boy
            ;; BARF not even close to what we actually want
            (let ([def (identifier-info-def node)])
-             (when def
+             (when def ;; lexical binding with source
                (let ([cell (source-table-cell st def '())])
                  (for-each (add-binding def) (identifier-info-ref* node))
                  (for-each (add-binding def) (identifier-info-set* node))
                  (set-cdr! cell
                    (cons
                     (json:make-object
+                     [kind (symbol->string (identifier-info-kind node))]
                      [refs (map maybe-source->json (identifier-info-ref* node))]
                      [sets (map maybe-source->json (identifier-info-set* node))])
                     (cdr cell))))))]
@@ -673,8 +674,8 @@
                     if (!element) return;
                     element.scrollIntoView({ behavior: 'smooth', block: 'center' });
                   }
-                  function generateListItems(obj) {
-                    let html = '';
+                  function generateListItems(kind, obj) {
+                    let html = `<b>${kind}</b><ul>`;
                     for (const key in obj) {
                       if (Array.isArray(obj[key])) {
                          html += `<li>${key}: `;
@@ -682,17 +683,19 @@
                          html += spans + `</li>`;
                       }
                     }
-                    return html;
+                    return html + '</ul>';
                   }
                   function updateLegend(info) {
                     const legend = document.getElementById('legend');
                     if (!legend) return;
                     var items = { refs: [], sets: [], binding: [] };
+                    var kind = '?reference';
                     info.forEach(ls => ls.forEach(si => (si.refs || []).forEach(src => { if (!src.bfp) return; items.refs.push(src); }) ))
                     info.forEach(ls => ls.forEach(si => (si.sets || []).forEach(src => { if (!src.bfp) return; items.sets.push(src); }) ))
                     info.forEach(ls => ls.forEach(si => { if (si.binding) items.binding.push(si.binding); }));
+                    info.forEach(ls => ls.forEach(si => { if (si.kind) kind = si.kind; })); // HACK
                     console.log(JSON.stringify(items, null, 2));
-                    legend.innerHTML = generateListItems(items);
+                    legend.innerHTML = generateListItems(kind, items);
                   }
                   function handleMouseOver(event) {
                     const info = infoDictionary[event.target.id];
@@ -878,6 +881,7 @@
                "}\n"))
            (fprintf op ".navigation { position:sticky; top:0; background-color:~a; }\n" bg)
            (fprintf op ".legend { position:sticky; top:5em; float:right; text-align:left; width: 30em; }\n")
+           (fprintf op ".legend ul { padding-left: 2em; margin-top: .5em; }\n")
            ;; TODO negative margin is a hack to compensate for border
            (fprintf op ".highlight { background: rgba(255, 255, 0, 0.25); border: solid 1px black; margin: -1px; }\n")
            (fprintf op ".highlightbinding { background: yellow; border: solid 1px green; margin: -1px; }\n")
