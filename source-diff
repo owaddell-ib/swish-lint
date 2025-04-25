@@ -476,6 +476,24 @@
               "from dim_observation"))))
        (hr)))
 
+  (define-syntax (extract-block-comment x) ;; NOTE: slightly modified here
+    (let ([annotation (syntax->annotation x)])
+      (assert annotation)
+      (let* ([src (annotation-source annotation)]
+             [bfp (source-object-bfp src)]
+             [efp (source-object-efp src)]
+             [path (source-file-descriptor-path (source-object-sfd src))])
+        #`(begin ;; lambda ()
+            (let ([s (utf8->string (read-file #,path))])
+              (define (scan i dir prev)
+                (let ([c (string-ref s i)] [next (+ i dir)])
+                  (unless (< 0 next #,efp)
+                    (errorf 'extract-block-comment "expected to find #| ... |# in ~a" s))
+                  (if (and (char=? c #\|) (eqv? prev #\#))
+                      next
+                      (scan next dir c))))
+              (substring s (scan #,bfp 1 #f) (scan #,efp -1 #f)))))))
+
   (define pages
     (json:make-object
      [/
@@ -608,65 +626,69 @@
                   "var infoDictionary = {};"
                   (format "const myFilename = '~a';" filename)
                   (format "const myChecksum = '~a';" checksum)
-                  "function showSource(field) {"
-                  "  return src => {"
-                  "    if (!src) return;"
-                  "    if (!src.bfp) return;"
-                  "    if (src.sfd.crc != myChecksum && src.sfd.path != myFilename) {"
-                  "       console.log('different file:', src.sfd);"  ;; TODO  handle this
-                  "       return;"
-                  "    }"
-                  "    const elt = document.getElementById('bfp'+src.bfp);"
-                  "    if (elt) { elt.classList.add('highlight' + field); }"
-                  "  }"
-                  "}"
-                  "function showSourceFor(si, field) {"
-                  "  if (!si) return;"
-                  "  const srcs = si[field];"
-                  "  if (!srcs) return;"
-                  "  srcs.forEach(showSource(field));"
-                  "}"
-                  "function showInfo(id, info) {"
-                  "  info.forEach(ls => ls.forEach(si => { showSourceFor(si, 'refs'); showSourceFor(si, 'sets'); }));"
-                  "  info.forEach(ls => ls.forEach(si => { if (si.binding) { console.log('here with', si);  showSource('binding')(si.binding) } }));"
-                  "}"
-                  "async function fetchData() {"
-                  "  try {"
-                  (format "  const reply = await fetch('/get_data?obs=~{~a~^,~}&src=~a');" obs src)
-                  "    if (!reply.ok) { throw new Error('reply was not okay'); }"
-                  "    infoDictionary = await reply.json();"
-                  "  } catch (error) {"
-                  "    console.log('something went wrong with fetch:', error);"
-                  "  }"
-                  "};"
-                  "function updateLegend(info) {"
-                  "  const legend = document.getElementById('legend');"
-                  "  if (!legend) return;"
-                  "  var items = { refs: [], sets: [], binding: [] };"
-                  "  info.forEach(ls => ls.forEach(si => (si.refs || []).forEach(src => { if (!src.bfp) return; items.refs.push(src); }) ))"
-                  "  info.forEach(ls => ls.forEach(si => (si.sets || []).forEach(src => { if (!src.bfp) return; items.sets.push(src); }) ))"
-                  "  info.forEach(ls => ls.forEach(si => { if (si.binding) items.binding.push(si.binding); }));"
-                  "  console.log(JSON.stringify(items, null, 2));"
-                  "  legend.textContent = JSON.stringify(items, null, 2);"
-                  "}"
-                  "function handleMouseOver(event) {"
-                  "  const info = infoDictionary[event.target.id];"
-                  "  document.querySelectorAll('.highlight').forEach(x => x.classList.remove('highlight'));"
-                  ;; TODO horrible
-                  "  document.querySelectorAll('.highlightrefs').forEach(x => x.classList.remove('highlightrefs'));"
-                  "  document.querySelectorAll('.highlightsets').forEach(x => x.classList.remove('highlightsets'));"
-                  "  document.querySelectorAll('.highlightbinding').forEach(x => x.classList.remove('highlightbinding'));"
-                  "  if (!info) { legend.textContent = ''; return; }"
-                  "  event.target.classList.add('highlight');"
-                  "  showInfo(event.target.id, info);"
-                  "  const pretty = JSON.stringify(info, null, 2);"
-                  "  // console.log(pretty);"
-                  "  updateLegend(info);"
-                  "}"
-                  "document.addEventListener('DOMContentLoaded', fetchData);"
-                  "document.addEventListener('DOMContentLoaded', () => {"
-                  "  document.querySelectorAll('span').forEach(span => span.addEventListener('mouseover', handleMouseOver));"
-                  "});"
+                  (format "const myObs = '~{~a~^,~}';" obs)
+                  (format "const mySrc = '~a';" src)
+                  (extract-block-comment #|
+                  function showSource(field) {
+                    return src => {
+                      if (!src) return;
+                      if (!src.bfp) return;
+                      if (src.sfd.crc != myChecksum && src.sfd.path != myFilename) {
+                         console.log('different file:', src.sfd);  // TODO  handle this
+                         return;
+                      }
+                      const elt = document.getElementById('bfp'+src.bfp);
+                      if (elt) { elt.classList.add('highlight' + field); }
+                    }
+                  }
+                  function showSourceFor(si, field) {
+                    if (!si) return;
+                    const srcs = si[field];
+                    if (!srcs) return;
+                    srcs.forEach(showSource(field));
+                  }
+                  function showInfo(id, info) {
+                    info.forEach(ls => ls.forEach(si => { showSourceFor(si, 'refs'); showSourceFor(si, 'sets'); }));
+                    info.forEach(ls => ls.forEach(si => { if (si.binding) { console.log('here with', si);  showSource('binding')(si.binding) } }));
+                  }
+                  async function fetchData() {
+                    try {
+                    const reply = await fetch(`/get_data?obs=${myObs}&src=${mySrc}`);
+                      if (!reply.ok) { throw new Error('reply was not okay'); }
+                      infoDictionary = await reply.json();
+                    } catch (error) {
+                      console.log('something went wrong with fetch:', error);
+                    }
+                  };
+                  function updateLegend(info) {
+                    const legend = document.getElementById('legend');
+                    if (!legend) return;
+                    var items = { refs: [], sets: [], binding: [] };
+                    info.forEach(ls => ls.forEach(si => (si.refs || []).forEach(src => { if (!src.bfp) return; items.refs.push(src); }) ))
+                    info.forEach(ls => ls.forEach(si => (si.sets || []).forEach(src => { if (!src.bfp) return; items.sets.push(src); }) ))
+                    info.forEach(ls => ls.forEach(si => { if (si.binding) items.binding.push(si.binding); }));
+                    console.log(JSON.stringify(items, null, 2));
+                    legend.textContent = JSON.stringify(items, null, 2);
+                  }
+                  function handleMouseOver(event) {
+                    const info = infoDictionary[event.target.id];
+                    document.querySelectorAll('.highlight').forEach(x => x.classList.remove('highlight'));
+                  // TODO horrible
+                    document.querySelectorAll('.highlightrefs').forEach(x => x.classList.remove('highlightrefs'));
+                    document.querySelectorAll('.highlightsets').forEach(x => x.classList.remove('highlightsets'));
+                    document.querySelectorAll('.highlightbinding').forEach(x => x.classList.remove('highlightbinding'));
+                    if (!info) { legend.textContent = ''; return; }
+                    event.target.classList.add('highlight');
+                    showInfo(event.target.id, info);
+                    const pretty = JSON.stringify(info, null, 2);
+                    // console.log(pretty);
+                    updateLegend(info);
+                  }
+                  document.addEventListener('DOMContentLoaded', fetchData);
+                  document.addEventListener('DOMContentLoaded', () => {
+                    document.querySelectorAll('span').forEach(span => span.addEventListener('mouseover', handleMouseOver));
+                  });
+                   |#)
                   "</script>"
                   "</head>")
                 (html:encode filename)
