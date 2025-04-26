@@ -889,7 +889,7 @@
            (fprintf op "table.code { padding:0; border-spacing:0; }\n")
            (fprintf op "table.code td { padding-top:0; padding-bottom:0; }\n")
            ;; TODO for some reason whatever font I was getting in Firefox by default had really whacky white space size; maybe since fixed
-           (fprintf op "pre { font-family: \"Deja Vu Sans Mono\", Menlo; }\n")
+           (fprintf op "pre { font-family: \"Deja Vu Sans Mono\", Menlo; font-size: 10pt; }\n")
            (fprintf op
              (ct:join " "
                "table.code td:nth-child(1) {"
@@ -910,6 +910,9 @@
            (fprintf op ".highlightbinding { background: yellow; border: solid 1px green; margin: -1px; }\n")
            (fprintf op ".highlightrefs { background: rgba(255, 255, 0, 0.25); border: solid 1px blue; margin: -1px; }\n")
            (fprintf op ".highlightsets { background: rgba(255, 255, 0, 0.25); border: solid 1px red; margin: -1px; }\n")
+           (fprintf op ".primsafe { color: #115511; }\n")
+           (fprintf op ".primunsafe { color: #661111; background: rgba(100, 100, 200, .1); }\n")
+           (fprintf op ".primsafe { color: #115511; background: rgba(100, 100, 200, .1); }\n")
            (fprintf op ".cov_low { color: #FF0000; }\n")
            (fprintf op ".cov_medium { color: #FF8800; }\n")
            (fprintf op ".cov_high { color: #007F00; }\n")
