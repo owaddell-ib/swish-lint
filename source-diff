@@ -510,6 +510,245 @@
                       (scan next dir c))))
               (substring s (scan #,bfp 1 #f) (scan #,efp -1 #f)))))))
 
+  (define animation-duration 1500) ;; BARF
+
+  (define (render-source conn src obs cm target-bfp)
+    (match (transaction 'db
+             (execute "select src_filename, src_code, src_checksum from dim_source where src_pk=?" src))
+      [() (not-found conn)]
+      [(#(,filename ,code, checksum))
+       ;; Fancy
+       (define ip (open-bytevector-input-port code (make-utf8-transcoder)))
+       (define data
+         (transaction 'db
+           (apply execute
+             (format
+              (ct:join " "
+                "select distinct rng_bfp, rng_efp, info"
+                "from fact_profile"
+                "inner join dim_range on rng_pk=rng_fk"
+                "where src_fk=?"
+                "and obs_fk in (~a)"
+                "group by rng_bfp, rng_efp"
+                "order by rng_bfp")
+              (template obs))
+             src
+             obs)))
+       (define (get-bfp row) (vector-ref row 0))
+       (define (get-efp row) (vector-ref row 1))
+       (define (get-info row) (json:string->object (vector-ref row 2)))
+       (define-values (op get) (open-bytevector-output-port (make-utf8-transcoder)))
+
+       (fprintf op
+         (ct:join #\newline
+           "<!DOCTYPE html>"
+           "<html>"
+           "<head>"
+           "<meta charset=\"UTF-8\">"
+           "<title>~a</title>"
+           "<link type=\"text/css\" rel=\"stylesheet\" href=\"style.css?cm=~a\">"
+           ;; TODO this is clearly not the way to include scripts
+           "<script>"
+           "var infoDictionary = {};"
+           (format "const myFilename = '~a';" filename)
+           (format "const myChecksum = '~a';" checksum)
+           (format "const myObs = '~{~a~^,~}';" obs)
+           (format "const mySrc = '~a';" src)
+           (format "const myTargetBFP = 'bfp~a';" target-bfp)
+           (format "const animationDuration = ~f;" animation-duration)
+           (extract-block-comment #|
+                  function showSource(field) {
+                    return src => {
+                      if (!src) return;
+                      if (!src.bfp) return;
+                      if (src.sfd.crc != myChecksum && src.sfd.path != myFilename) {
+                         console.log('different file:', src.sfd);  // TODO  handle this
+                         return;
+                      }
+                      const elt = document.getElementById('bfp'+src.bfp);
+                      if (elt) { elt.classList.add('highlight' + field); }
+                    }
+                  }
+                  function showSourceFor(si, field) {
+                    if (!si) return;
+                    const srcs = si[field];
+                    if (!srcs) return;
+                    srcs.forEach(showSource(field));
+                  }
+                  function showInfo(id, info) {
+                    info.forEach(ls => ls.forEach(si => { showSourceFor(si, 'refs'); showSourceFor(si, 'sets'); }));
+                    info.forEach(ls => ls.forEach(si => { if (si.binding) { console.log('here with', si);  showSource('binding')(si.binding) } }));
+                  }
+                  async function fetchData() {
+                    try {
+                    const reply = await fetch(`/get_data?obs=${myObs}&src=${mySrc}`);
+                      if (!reply.ok) { throw new Error('reply was not okay'); }
+                      infoDictionary = await reply.json();
+                    } catch (error) {
+                      console.log('something went wrong with fetch:', error);
+                    }
+                  };
+                  function makeSourceLink(item) {
+                    if (!item.bfp) return '<span>?</span>';
+                    if ((item.sfd.crc != myChecksum) || (item.sfd.path != myFilename)) {
+                      const encoded = encodeURIComponent(item.sfd.path);
+                      return `<a href='/findsource?obs=${myObs}&path=${encoded}&bfp=${item.bfp}'>${item.bfp}</a>`;
+                    }
+                    return `<span onClick="scrollToElement('bfp${item.bfp}')">${item.bfp}</span>`;
+                  }
+                  function scrollToElement(id) {
+                    const element = document.getElementById(id);
+                    if (!element) return;
+                    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    // Add the highlight class
+                    element.classList.add('highlight');
+                    // Remove the class after the animation duration
+                    // BARF: Match duration here with the animation duration in CSS
+                    setTimeout(() => { element.classList.remove('highlight');}, animationDuration);
+                  }
+                  function generateListItems(kind, obj) {
+                    let html = `<b>${kind}</b><ul>`;
+                    for (const key in obj) {
+                      if (Array.isArray(obj[key])) {
+                         html += `<li>${key}: `;
+                         const spans = obj[key].map(makeSourceLink).join(', ');
+                         html += spans + `</li>`;
+                      }
+                    }
+                    return html + '</ul>';
+                  }
+                  function updateLegend(info) {
+                    const legend = document.getElementById('legend');
+                    if (!legend) return;
+                    var items = { refs: [], sets: [], binding: [] };
+                    var kind = '?reference';
+                    info.forEach(ls => ls.forEach(si => (si.refs || []).forEach(src => { if (!src.bfp) return; items.refs.push(src); }) ))
+                    info.forEach(ls => ls.forEach(si => (si.sets || []).forEach(src => { if (!src.bfp) return; items.sets.push(src); }) ))
+                    info.forEach(ls => ls.forEach(si => { if (si.binding) items.binding.push(si.binding); }));
+                    info.forEach(ls => ls.forEach(si => { if (si.kind) kind = si.kind; })); // HACK
+                    console.log(JSON.stringify(items, null, 2));
+                    legend.innerHTML = generateListItems(kind, items);
+                  }
+                  function handleMouseOver(event) {
+                    const info = infoDictionary[event.target.id];
+                    document.querySelectorAll('.highlight').forEach(x => x.classList.remove('highlight'));
+                  // TODO horrible
+                    document.querySelectorAll('.highlightrefs').forEach(x => x.classList.remove('highlightrefs'));
+                    document.querySelectorAll('.highlightsets').forEach(x => x.classList.remove('highlightsets'));
+                    document.querySelectorAll('.highlightbinding').forEach(x => x.classList.remove('highlightbinding'));
+                    if (!info) { updateLegend([]); return; }
+                    event.target.classList.add('highlight');
+                    showInfo(event.target.id, info);
+                    const pretty = JSON.stringify(info, null, 2);
+                    // console.log(pretty);
+                    updateLegend(info);
+                  }
+                  document.addEventListener('DOMContentLoaded', fetchData);
+                  document.addEventListener('DOMContentLoaded', () => {
+                    document.querySelectorAll('span').forEach(span => span.addEventListener('mouseover', handleMouseOver));
+                    scrollToElement(myTargetBFP);
+                  });
+                   |#)
+           "</script>"
+           "</head>")
+         (html:encode filename)
+         (html:encode cm))
+       (fprintf op
+         (ct:join ""
+           "<body>"
+           "~a"
+           "<h1>~a</h1>"
+           "<div id=\"legend\" class=\"legend\"></div>"
+           "<pre>")
+         (html->string (navigation-panel "/source" src obs cm))
+         (html:encode filename))
+       (let ()
+         (define get-next
+           (generator
+            (let lp ([fp 0] [line 1] [ls data] [stack '()] [start-of-line? #t])
+              (cond
+               [(and (pair? stack) (let ([row (car stack)]) (and (= (get-efp (car stack)) fp) row))) =>
+                (lambda (row)
+                  (yield 'pop-count)
+                  (lp fp line ls (cdr stack) start-of-line?))]
+               [(and (pair? ls) (let ([row (car ls)]) (and (= (get-bfp row) fp) row))) =>
+                (lambda (row)
+                  (yield `#(push-count ,fp ,(get-info row))) ;; TODO really regions now
+                  (lp fp line (cdr ls) (cons row stack) start-of-line?))]
+               [else
+                (let ([c (read-char ip)])
+                  (cond
+                   [(eof-object? c) (void)]
+                   [(eq? c #\newline)
+                    (when start-of-line?
+                      (yield `#(line ,line)))
+                    (yield c)
+                    (lp (+ fp 1) (+ line 1) ls stack #t)]
+                   [else
+                    (when start-of-line?
+                      (yield `#(line ,line)))
+                    (yield c)
+                    (lp (+ fp 1) line ls stack #f)]))]))
+            (let lp ()
+              (yield (eof-object))
+              (lp))))
+
+         (define (color-class c m)
+           (format "c~a" (random 10))) ;;; HACK
+         (define no-info '())
+         (define (get-prim-class info)
+           (let ([pinfo (find (lambda (x) (json:ref x 'prim #f)) info)])
+             (and pinfo (json:ref pinfo 'mode #f))))
+         (define (start-span counts info)
+           (fprintf op "<span title=~s id=\"bfp~a\" class=\"~@[prim~a ~]~{c~a~^ ~}\">"
+             (html:encode (json:object->string info))
+             (car counts)
+             (get-prim-class info)
+             counts))
+
+         (fprintf op "<table class=\"code\">\n")
+         ;; TODO counts is really classes now
+         (let lp ([counts '()] [leading? #t])
+           (match (get-next)
+             [#!eof (void)]
+             [pop-count
+              (when (pair? counts)
+                (fprintf op "</span>"))
+              (let ([counts (cdr counts)])
+                (when (pair? counts)
+                  (start-span counts no-info))
+                (lp counts leading?))]
+             [#(push-count ,fp ,info)
+              (let ([counts (cons fp counts)])
+                (start-span counts info)
+                (lp counts leading?))]
+             [#(line ,line)
+              (fprintf op "<tr><td>~a</td><td id=\"L~a\">" line line)
+              (lp counts leading?)]
+             [#\newline
+              (when (pair? counts)
+                (fprintf op "</span>"))
+              (fprintf op "</td></tr>\n")
+              (lp counts #t)]
+             [,c
+              (guard (and leading? (char-whitespace? c)))
+              (html:encode op (format "~a" c))
+              (lp counts leading?)]
+             [,c
+              (when (and leading? (pair? counts))
+                (start-span counts no-info))
+              (html:encode op (format "~a" c))
+              (lp counts #f)]))
+         (fprintf op "</table>\n"))
+
+       (fprintf op
+         (ct:join ""
+           "</pre>"
+           "</body>"
+           "</html>"))
+
+       (http:respond conn 200 '(("Content-Type" . "text/html")) (get))]))
+
   (define pages
     (json:make-object
      [/
@@ -598,238 +837,38 @@
                       (json:set! obj (string->symbol (format "bfp~a" bfp)) (json:string->object json-txt))))
                   data)
                  obj)))])))]
+     [/findsource
+      (http:url-handler
+       (let ([path (http:get-param 'path params)]
+             [obs (obs->list (http:find-param 'obs params))]
+             [bfp (cond [(http:find-param 'bfp params) => arg->integer] [else #f])]
+             [cm (or (http:find-param 'cm params) "default")])
+         (match-define (#(,src))
+           (transaction 'db
+             (apply execute
+               (format
+                (ct:join " "
+                  "select src_pk"
+                  "from dim_source"
+                  "inner join fact_profile on src_pk = src_fk"
+                  "where src_filename = ?"
+                  "and obs_fk in (~a)"
+                  "limit 1")
+                (template obs))
+               path
+               obs)))
+         (printf "path: ~a\n" path)
+         (printf "obs: ~s\n" obs)
+         (printf "bfp: ~a\n" bfp)
+         (printf "src: ~s  [result from query]\n" src)
+         (render-source conn src obs cm bfp)))]
      [/source
       (http:url-handler
        (let ([src (arg->integer (http:get-param 'src params))]
              [obs (obs->list (http:find-param 'obs params))]
+             [bfp (cond [(http:find-param 'bfp params) => arg->integer] [else #f])]
              [cm (or (http:find-param 'cm params) "default")])
-         (match (transaction 'db
-                  (execute "select src_filename, src_code, src_checksum from dim_source where src_pk=?" src))
-           [() (not-found conn)]
-           [(#(,filename ,code, checksum))
-            ;; Fancy
-            (define ip (open-bytevector-input-port code (make-utf8-transcoder)))
-            (define data
-              (transaction 'db
-                (apply execute
-                  (format
-                   (ct:join " "
-                     "select distinct rng_bfp, rng_efp, info"
-                     "from fact_profile"
-                     "inner join dim_range on rng_pk=rng_fk"
-                     "where src_fk=?"
-                     "and obs_fk in (~a)"
-                     "group by rng_bfp, rng_efp"
-                     "order by rng_bfp")
-                   (template obs))
-                  src
-                  obs)))
-            (define (get-bfp row) (vector-ref row 0))
-            (define (get-efp row) (vector-ref row 1))
-            (define (get-info row) (json:string->object (vector-ref row 2)))
-            (define-values (op get) (open-bytevector-output-port (make-utf8-transcoder)))
-
-            (fprintf op
-              (ct:join #\newline
-                "<!DOCTYPE html>"
-                "<html>"
-                "<head>"
-                "<meta charset=\"UTF-8\">"
-                "<title>~a</title>"
-                "<link type=\"text/css\" rel=\"stylesheet\" href=\"style.css?cm=~a\">"
-                ;; TODO this is clearly not the way to include scripts
-                "<script>"
-                "var infoDictionary = {};"
-                (format "const myFilename = '~a';" filename)
-                (format "const myChecksum = '~a';" checksum)
-                (format "const myObs = '~{~a~^,~}';" obs)
-                (format "const mySrc = '~a';" src)
-                (extract-block-comment #|
-                  function showSource(field) {
-                    return src => {
-                      if (!src) return;
-                      if (!src.bfp) return;
-                      if (src.sfd.crc != myChecksum && src.sfd.path != myFilename) {
-                         console.log('different file:', src.sfd);  // TODO  handle this
-                         return;
-                      }
-                      const elt = document.getElementById('bfp'+src.bfp);
-                      if (elt) { elt.classList.add('highlight' + field); }
-                    }
-                  }
-                  function showSourceFor(si, field) {
-                    if (!si) return;
-                    const srcs = si[field];
-                    if (!srcs) return;
-                    srcs.forEach(showSource(field));
-                  }
-                  function showInfo(id, info) {
-                    info.forEach(ls => ls.forEach(si => { showSourceFor(si, 'refs'); showSourceFor(si, 'sets'); }));
-                    info.forEach(ls => ls.forEach(si => { if (si.binding) { console.log('here with', si);  showSource('binding')(si.binding) } }));
-                  }
-                  async function fetchData() {
-                    try {
-                    const reply = await fetch(`/get_data?obs=${myObs}&src=${mySrc}`);
-                      if (!reply.ok) { throw new Error('reply was not okay'); }
-                      infoDictionary = await reply.json();
-                    } catch (error) {
-                      console.log('something went wrong with fetch:', error);
-                    }
-                  };
-                  function makeSourceLink(item) {
-                    if (!item.bfp) return '<span>?</span>';
-                    if ((item.sfd.crc != myChecksum) || (item.sfd.path != myFilename)) {
-                      const encoded = encodeURIComponent(item.sfd.path);
-                      return `<a href='/source?obs=${myObs}+path=${encoded}+bfp=${item.bfp}'>${item.bfp}</a>`;
-                    }
-                    return `<span onClick="scrollToElement('bfp${item.bfp}')">${item.bfp}</span>`;
-                  }
-                  function scrollToElement(id) {
-                    const element = document.getElementById(id);
-                    if (!element) return;
-                    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                  }
-                  function generateListItems(kind, obj) {
-                    let html = `<b>${kind}</b><ul>`;
-                    for (const key in obj) {
-                      if (Array.isArray(obj[key])) {
-                         html += `<li>${key}: `;
-                         const spans = obj[key].map(makeSourceLink).join(', ');
-                         html += spans + `</li>`;
-                      }
-                    }
-                    return html + '</ul>';
-                  }
-                  function updateLegend(info) {
-                    const legend = document.getElementById('legend');
-                    if (!legend) return;
-                    var items = { refs: [], sets: [], binding: [] };
-                    var kind = '?reference';
-                    info.forEach(ls => ls.forEach(si => (si.refs || []).forEach(src => { if (!src.bfp) return; items.refs.push(src); }) ))
-                    info.forEach(ls => ls.forEach(si => (si.sets || []).forEach(src => { if (!src.bfp) return; items.sets.push(src); }) ))
-                    info.forEach(ls => ls.forEach(si => { if (si.binding) items.binding.push(si.binding); }));
-                    info.forEach(ls => ls.forEach(si => { if (si.kind) kind = si.kind; })); // HACK
-                    console.log(JSON.stringify(items, null, 2));
-                    legend.innerHTML = generateListItems(kind, items);
-                  }
-                  function handleMouseOver(event) {
-                    const info = infoDictionary[event.target.id];
-                    document.querySelectorAll('.highlight').forEach(x => x.classList.remove('highlight'));
-                  // TODO horrible
-                    document.querySelectorAll('.highlightrefs').forEach(x => x.classList.remove('highlightrefs'));
-                    document.querySelectorAll('.highlightsets').forEach(x => x.classList.remove('highlightsets'));
-                    document.querySelectorAll('.highlightbinding').forEach(x => x.classList.remove('highlightbinding'));
-                    if (!info) { updateLegend([]); return; }
-                    event.target.classList.add('highlight');
-                    showInfo(event.target.id, info);
-                    const pretty = JSON.stringify(info, null, 2);
-                    // console.log(pretty);
-                    updateLegend(info);
-                  }
-                  document.addEventListener('DOMContentLoaded', fetchData);
-                  document.addEventListener('DOMContentLoaded', () => {
-                    document.querySelectorAll('span').forEach(span => span.addEventListener('mouseover', handleMouseOver));
-                  });
-                   |#)
-                "</script>"
-                "</head>")
-              (html:encode filename)
-              (html:encode cm))
-            (fprintf op
-              (ct:join ""
-                "<body>"
-                "~a"
-                "<h1>~a</h1>"
-                "<div id=\"legend\" class=\"legend\"></div>"
-                "<pre>")
-              (html->string (navigation-panel "/source" src obs cm))
-              (html:encode filename))
-            (let ()
-              (define get-next
-                (generator
-                 (let lp ([fp 0] [line 1] [ls data] [stack '()] [start-of-line? #t])
-                   (cond
-                    [(and (pair? stack) (let ([row (car stack)]) (and (= (get-efp (car stack)) fp) row))) =>
-                     (lambda (row)
-                       (yield 'pop-count)
-                       (lp fp line ls (cdr stack) start-of-line?))]
-                    [(and (pair? ls) (let ([row (car ls)]) (and (= (get-bfp row) fp) row))) =>
-                     (lambda (row)
-                       (yield `#(push-count ,fp ,(get-info row))) ;; TODO really regions now
-                       (lp fp line (cdr ls) (cons row stack) start-of-line?))]
-                    [else
-                     (let ([c (read-char ip)])
-                       (cond
-                        [(eof-object? c) (void)]
-                        [(eq? c #\newline)
-                         (when start-of-line?
-                           (yield `#(line ,line)))
-                         (yield c)
-                         (lp (+ fp 1) (+ line 1) ls stack #t)]
-                        [else
-                         (when start-of-line?
-                           (yield `#(line ,line)))
-                         (yield c)
-                         (lp (+ fp 1) line ls stack #f)]))]))
-                 (let lp ()
-                   (yield (eof-object))
-                   (lp))))
-
-              (define (color-class c m)
-                (format "c~a" (random 10))) ;;; HACK
-              (define no-info '())
-              (define (get-prim-class info)
-                (let ([pinfo (find (lambda (x) (json:ref x 'prim #f)) info)])
-                  (and pinfo (json:ref pinfo 'mode #f))))
-              (define (start-span counts info)
-                (fprintf op "<span title=~s id=\"bfp~a\" class=\"~@[prim~a ~]~{c~a~^ ~}\">"
-                  (html:encode (json:object->string info))
-                  (car counts)
-                  (get-prim-class info)
-                  counts))
-
-              (fprintf op "<table class=\"code\">\n")
-              ;; TODO counts is really classes now
-              (let lp ([counts '()] [leading? #t])
-                (match (get-next)
-                  [#!eof (void)]
-                  [pop-count
-                   (when (pair? counts)
-                     (fprintf op "</span>"))
-                   (let ([counts (cdr counts)])
-                     (when (pair? counts)
-                       (start-span counts no-info))
-                     (lp counts leading?))]
-                  [#(push-count ,fp ,info)
-                   (let ([counts (cons fp counts)])
-                     (start-span counts info)
-                     (lp counts leading?))]
-                  [#(line ,line)
-                   (fprintf op "<tr><td>~a</td><td id=\"L~a\">" line line)
-                   (lp counts leading?)]
-                  [#\newline
-                   (when (pair? counts)
-                     (fprintf op "</span>"))
-                   (fprintf op "</td></tr>\n")
-                   (lp counts #t)]
-                  [,c
-                   (guard (and leading? (char-whitespace? c)))
-                   (html:encode op (format "~a" c))
-                   (lp counts leading?)]
-                  [,c
-                   (when (and leading? (pair? counts))
-                     (start-span counts no-info))
-                   (html:encode op (format "~a" c))
-                   (lp counts #f)]))
-              (fprintf op "</table>\n"))
-
-            (fprintf op
-              (ct:join ""
-                "</pre>"
-                "</body>"
-                "</html>"))
-
-            (http:respond conn 200 '(("Content-Type" . "text/html")) (get))])))]
+         (render-source conn src obs cm bfp)))]
      [/style.css
       (http:url-handler
        (let ([cm (or (http:find-param 'cm params) "default")])
@@ -885,7 +924,7 @@
          (define-values (op get) (open-bytevector-output-port (make-utf8-transcoder)))
          (let ([bg "white"]
                [fg "black"])
-           (fprintf op "BODY { font-family: monospace; background-color: ~a; color: ~a; }\n" bg fg)
+           (fprintf op "BODY { font-size: 10pt; background-color: ~a; color: ~a; }\n" bg fg)
            (fprintf op "table.code { padding:0; border-spacing:0; }\n")
            (fprintf op "table.code td { padding-top:0; padding-bottom:0; }\n")
            ;; TODO for some reason whatever font I was getting in Firefox by default had really whacky white space size; maybe since fixed
@@ -903,10 +942,11 @@
                "user-select: none;"
                "}\n"))
            (fprintf op ".navigation { position:sticky; top:0; background-color:~a; }\n" bg)
-           (fprintf op ".legend { position:sticky; top:5em; float:right; text-align:left; width: 30em; }\n")
+           (fprintf op ".legend { font-family: sans-serif; position:sticky; top:5em; float:right; text-align:left; width: 30em; }\n")
            (fprintf op ".legend ul { padding-left: 2em; margin-top: .5em; }\n")
+           (fprintf op ".highlight { background-color: yellow; animation: pulse ~fs ease; }\n" (/ animation-duration 1000))
+           (fprintf op "@keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }\n")
            ;; TODO negative margin is a hack to compensate for border
-           (fprintf op ".highlight { background: rgba(255, 255, 0, 0.25); border: solid 1px black; margin: -1px; }\n")
            (fprintf op ".highlightbinding { background: yellow; border: solid 1px green; margin: -1px; }\n")
            (fprintf op ".highlightrefs { background: rgba(255, 255, 0, 0.25); border: solid 1px blue; margin: -1px; }\n")
            (fprintf op ".highlightsets { background: rgba(255, 255, 0, 0.25); border: solid 1px red; margin: -1px; }\n")
