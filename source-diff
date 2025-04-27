@@ -588,13 +588,16 @@
                       console.log('something went wrong with fetch:', error);
                     }
                   };
+                  function getFilename(path) {
+                    return path.split(/[/\\]/).pop();
+                  }
                   function makeSourceLink(item) {
                     if (!item.bfp) return '<span>?</span>';
                     if ((item.sfd.crc != myChecksum) || (item.sfd.path != myFilename)) {
                       const encoded = encodeURIComponent(item.sfd.path);
-                      return `<a href='/findsource?obs=${myObs}&path=${encoded}&bfp=${item.bfp}'>${item.bfp}</a>`;
+                      return `<a href='/findsource?obs=${myObs}&path=${encoded}&bfp=${item.bfp}'>${getFilename(item.sfd.path)}:${item.bfp}</a>`;
                     }
-                    return `<span onClick="scrollToElement('bfp${item.bfp}')">${item.bfp}</span>`;
+                    return `<span class="internalLink" onClick="scrollToElement('bfp${item.bfp}')">${item.bfp}</span>`;
                   }
                   function scrollToElement(id) {
                     const element = document.getElementById(id);
@@ -620,7 +623,7 @@
                   function updateLegend(info) {
                     const legend = document.getElementById('legend');
                     if (!legend) return;
-                    var items = { refs: [], sets: [], binding: [] };
+                    var items = {binding: [],refs: [], sets: []};
                     var kind = '?reference';
                     info.forEach(ls => ls.forEach(si => (si.refs || []).forEach(src => { if (!src.bfp) return; items.refs.push(src); }) ))
                     info.forEach(ls => ls.forEach(si => (si.sets || []).forEach(src => { if (!src.bfp) return; items.sets.push(src); }) ))
@@ -657,8 +660,10 @@
          (ct:join ""
            "<body>"
            "~a"
-           "<h1>~a</h1>"
-           "<div id=\"legend\" class=\"legend\"></div>"
+           "<div class=\"legend\">"
+           "  <div id=\"filename\">~a</div>"
+           "  <div id=\"legend\"></div>"
+           "</div>"
            "<pre>")
          (html->string (navigation-panel "/source" src obs cm))
          (html:encode filename))
@@ -857,10 +862,6 @@
                 (template obs))
                path
                obs)))
-         (printf "path: ~a\n" path)
-         (printf "obs: ~s\n" obs)
-         (printf "bfp: ~a\n" bfp)
-         (printf "src: ~s  [result from query]\n" src)
          (render-source conn src obs cm bfp)))]
      [/source
       (http:url-handler
@@ -942,7 +943,7 @@
                "user-select: none;"
                "}\n"))
            (fprintf op ".navigation { position:sticky; top:0; background-color:~a; }\n" bg)
-           (fprintf op ".legend { font-family: sans-serif; position:sticky; top:5em; float:right; text-align:left; width: 30em; }\n")
+           (fprintf op ".legend { font-family: sans-serif; position:sticky; top:5em; float:right; text-align:left; width: 30em; background: rgba(100, 100, 200, .1); }\n")
            (fprintf op ".legend ul { padding-left: 2em; margin-top: .5em; }\n")
            (fprintf op ".highlight { background-color: yellow; animation: pulse ~fs ease; }\n" (/ animation-duration 1000))
            (fprintf op "@keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }\n")
@@ -953,6 +954,7 @@
            (fprintf op ".primsafe { color: #115511; }\n")
            (fprintf op ".primunsafe { color: #661111; background: rgba(100, 100, 200, .1); }\n")
            (fprintf op ".primsafe { color: #115511; background: rgba(100, 100, 200, .1); }\n")
+           (fprintf op ".internalLink { text-decoration: underline; }\n")
            (fprintf op ".cov_low { color: #FF0000; }\n")
            (fprintf op ".cov_medium { color: #FF8800; }\n")
            (fprintf op ".cov_high { color: #007F00; }\n")
