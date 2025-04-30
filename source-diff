@@ -661,12 +661,13 @@
            "<body>"
            "~a"
            "<div class=\"legend\">"
-           "  <div id=\"filename\">~a</div>"
+           "  <div title=\"~a\" id=\"filename\">~a</div>"
            "  <div id=\"legend\"></div>"
            "</div>"
            "<pre>")
          (html->string (navigation-panel "/source" src obs cm))
-         (html:encode filename))
+         (html:encode filename)
+         (html:encode (path-last filename)))
        (let ()
          (define get-next
            (generator
@@ -945,6 +946,7 @@
            (fprintf op ".navigation { position:sticky; top:0; background-color:~a; }\n" bg)
            (fprintf op ".legend { font-family: sans-serif; position:sticky; top:5em; float:right; text-align:left; width: 30em; background: rgba(100, 100, 200, .1); }\n")
            (fprintf op ".legend ul { padding-left: 2em; margin-top: .5em; }\n")
+           (fprintf op "#filename { font-size: 12pt; }\n")
            (fprintf op ".highlight { background-color: yellow; animation: pulse ~fs ease; }\n" (/ animation-duration 1000))
            (fprintf op "@keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }\n")
            ;; TODO negative margin is a hack to compensate for border
