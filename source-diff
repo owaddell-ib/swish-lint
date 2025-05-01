@@ -374,6 +374,18 @@
         (define binding (json:make-object [kind kind] [,edge-type (maybe-source->json ref-src)]))
         (lambda (use-src)
           (add-source-info! use-src binding)))
+      ;; TODO important(?) this will get the wrong answer if we use (import (except (foo) bar)) and also use (import (foo))
+      ;;      --> it's "wrong" because we currently get the import source for the entire import spec
+      ;;      - maybe add-import! should also give us the source for the specific library/module import
+      ;;      - that is, we might want the UI to show us:
+      ;;        1. only what is imported by that specific import-spec, and / or
+      ;;           - in this case, we'd need to track more precise information in add-import!
+      ;;        2. everything we imported from that library (that's probably the case I'd use most)
+      ;;           - in this case, we may get mileage out of a database query
+      (define (add-show-imported-query client-src)
+        (lambda (import-src)
+          (add-source-info! import-src
+            (json:make-object [show-imported (maybe-source->json client-src)]))))
       (foreach ([node node*])
         (cond
          [(identifier-info? node) ;; TODO oh boy
@@ -393,11 +405,11 @@
                 [def (get-source (interface-info-name node))]  ;; e.g., source for library name
                 [kind (symbol->string (interface-info-kind node))])
             (for-each (add-edge 'def kind def) (interface-info-ref* node))
+            (for-each (add-show-imported-query src) (interface-info-ref* node))
             ;; TODO what should we do with interface-info-impreq*
             ;; TODO what should we do with interface-info-export*
             ;;      - maybe it was enough that we added the global-ref at the export point?
             (when (or def src)
-              (printf "Wow, got source for interface-info ~s ~s: ~s\n" (interface-info-kind node) (interface-info-name node) src)
               ;; TODO consider using source for the library name / module name here [needs update to s/syntax.ss]
               (add-source-info! (or def src)
                 (json:make-object
@@ -670,15 +682,38 @@
                     // const pretty = JSON.stringify(info, null, 2);
                     // console.log(pretty);
                   }
+                  var throwAwayQueryInput = [];
+                  function throwAwayQuery(endpoint, idx) {
+                    const qi = throwAwayQueryInput;
+                    if (qi.length <= idx) { console.log(`No query for index ${idx} in:`, qi); return; }
+                    fetch(endpoint, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(qi[idx])
+                    })
+                    .then(() => { console.log('ignoring whatever the response was'); })
+                    .catch(err => { console.log('ERROR', err); });
+                  }
+                  function makeLinks(info) {
+                    var foo = { show_imported: [], kind: [] };
+                    info.forEach(ls => ls.forEach(node => {
+                      if (node['show-imported']) foo.show_imported.push(node);
+                      if (node.kind) foo.kind.push(node);
+                    }));
+                    if (foo.show_imported.length == 0) return '';
+                    // HACK HACK HACK
+                    throwAwayQueryInput = [ info ];
+                    return `<button onclick="throwAwayQuery('/show-imported', 0)">show imported</a>`;
+                  }
                   function handleClick(event) {
                     if (event.button === 0) {
                       // TERRIBLE
                       const legend = document.getElementById('legend');
                       if (!legend) return;
-                      const info = infoDictionary[event.target.id] || "Rats. Nothing.";
-                      const output = JSON.stringify(info, null, 2);
+                      const info = infoDictionary[event.target.id];
+                      const output = JSON.stringify(info || "Rats. Nothing.", null, 2);
                       console.log(`Clicked on ${event.target}`, output);
-                      legend.innerHTML = `<pre>${output}</pre>`;
+                      legend.innerHTML = `<pre>${output}</pre>` + makeLinks(info);
                     }
                   }
                   document.addEventListener('DOMContentLoaded', fetchData);
@@ -1025,12 +1060,30 @@
          (http:respond conn 200 '(("Content-Type" . "text/css")) (get))))]
      ))
 
+  (define post-hacks
+    (json:make-object
+     [/show-imported
+      (http:url-handler
+       (define len (string->number (http:get-header "Content-Length" header)))
+       (printf "/show-imported got ~s content\n" len)
+       (printf "request: ~s\n" request)
+       (http:call-with-ports conn
+         (lambda (ip op)
+           (define json (json:bytevector->object (get-bytevector-exactly-n ip len)))
+           (json:pretty json))
+         1000)
+       (http:respond conn 200 '() '#vu8())
+       )]))
+
   (http:add-server 'http (cond [(opt 'port) => string->number] [else 9002])
     (http:url-handler
      (<request> open request [method path])
      (cond
       [(and (eq? method 'GET)
             (json:ref pages (string->symbol path) #f)) =>
+       (lambda (h) (http:call-url-handler h))]
+      [(and (eq? method 'POST)
+            (json:ref post-hacks (string->symbol path) #f)) =>
        (lambda (h) (http:call-url-handler h))]
       [else
        (not-found conn)]))))
