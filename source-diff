@@ -702,7 +702,11 @@
                     }));
                     if (foo.show_imported.length == 0) return '';
                     // HACK HACK HACK
-                    throwAwayQueryInput = [ info ];
+                    console.log("FOO is:", foo);  
+                    if (foo.kind && foo.kind[0].def) {
+                      foo.import = infoDictionary['bfp' + foo.kind[0].def.bfp];
+                    }
+                    throwAwayQueryInput = [ foo ];
                     return `<button onclick="throwAwayQuery('/show-imported', 0)">show imported</a>`;
                   }
                   function handleClick(event) {
@@ -1069,8 +1073,48 @@
        (printf "request: ~s\n" request)
        (http:call-with-ports conn
          (lambda (ip op)
-           (define json (json:bytevector->object (get-bytevector-exactly-n ip len)))
-           (json:pretty json))
+           (define obs (list 0)) ;; TODO HACK, should be getting from param or something
+           (define req (json:bytevector->object (get-bytevector-exactly-n ip len)))
+           (define show-imported (json:ref req 'show-imported #f))
+           (define target (json:ref req 'import #f))
+           (define path
+             (cond
+              [(not target) #f]
+              [(ormap (lambda (ls) (find (lambda (x) (json:ref x 'src #f)) ls)) target) =>
+               (lambda (x) (json:ref x '(src sfd path) #f))]
+              [else #f]))
+           (define (trace-execute query . args)
+             (printf "query:\n~a\n" query)
+             (let ([result (apply execute query args)])
+               (pretty-print result)
+               result))
+           (json:pretty req)
+           (printf "show-imported: ~a\n" (json:object->string show-imported))
+           (printf "target: ~a\n" (json:object->string target))
+           (printf "path: ~a\n" path)
+           (when path
+             (transaction 'db
+               (apply trace-execute
+                 (format
+                  (ct:join #\newline
+                    "select fp.obs_fk, fp.src_fk, fp.rng_fk, info.value as alex from"
+                    "fact_profile fp,"
+                    "json_each(fp.info) info"
+                    "where json_extract(info.value, '$.kind') <> 'lexical'"
+                    "and fp.src_fk in ("
+                    "  select src_pk"
+                    "  from dim_source"
+                    "  inner join fact_profile on src_pk = src_fk"
+                    "  where src_filename = ?"
+                    "  and obs_fk in (~a)"
+                    "  limit 1"
+                    ")"
+                    )
+                  (template obs))
+                 path
+                 obs)
+               ))
+           )
          1000)
        (http:respond conn 200 '() '#vu8())
        )]))
