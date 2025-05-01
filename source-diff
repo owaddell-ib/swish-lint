@@ -368,8 +368,8 @@
         (when (source-object? src)
           (let ([cell (source-table-cell st src '())])
             (set-cdr! cell (cons info (cdr cell))))))
-      (define (add-binding ref-src)
-        (define binding (json:make-object [binding (maybe-source->json ref-src)]))
+      (define (add-edge edge-type ref-src)
+        (define binding (json:make-object [,edge-type (maybe-source->json ref-src)]))
         (lambda (use-src)
           (add-source-info! use-src binding)))
       (foreach ([node node*])
@@ -377,14 +377,27 @@
          [(identifier-info? node) ;; TODO oh boy
           ;; BARF not even close to what we actually want
           (let ([def (identifier-info-def node)])
-            (for-each (add-binding def) (identifier-info-ref* node))
-            (for-each (add-binding def) (identifier-info-set* node))
+            (for-each (add-edge 'def def) (identifier-info-ref* node))
+            (for-each (add-edge 'def def) (identifier-info-set* node))
             (when def
               (add-source-info! def
                 (json:make-object
                  [kind (symbol->string (identifier-info-kind node))]
                  [refs (map maybe-source->json (identifier-info-ref* node))]
                  [sets (map maybe-source->json (identifier-info-set* node))]))))]
+         [(interface-info? node)
+          (let ([src (interface-info-src node)])
+            (for-each (add-edge 'def src) (interface-info-ref* node))
+            ;; TODO what should we do with interface-info-impreq*
+            ;; TODO what should we do with interface-info-export*
+            ;;      - maybe it was enough that we added the global-ref at the export point?
+            (when src
+              (printf "Wow, got source for interface-info ~s ~s: ~s\n" (interface-info-kind node) (interface-info-name node) src)
+              (add-source-info! src
+                (json:make-object
+                 [kind (symbol->string (interface-info-kind node))]
+                 [refs (map maybe-source->json (interface-info-ref* node))]
+                 ))))]
          [else (printf "some other node: ~s\n" node)]))
       (foreach ([prim prim*])
         ;; prep.ss flipped these to the form below
@@ -623,11 +636,12 @@
                   function updateLegend(info) {
                     const legend = document.getElementById('legend');
                     if (!legend) return;
-                    var items = {binding: [],refs: [], sets: []};
-                    var kind = '?reference';
+                    var items = {defs: [], refs: [], sets: []};
+                    var kind = '';
+                    // Such horrible hackery; handle edge-type we used in (add-edge ...)
                     info.forEach(ls => ls.forEach(si => (si.refs || []).forEach(src => { if (!src.bfp) return; items.refs.push(src); }) ))
                     info.forEach(ls => ls.forEach(si => (si.sets || []).forEach(src => { if (!src.bfp) return; items.sets.push(src); }) ))
-                    info.forEach(ls => ls.forEach(si => { if (si.binding) items.binding.push(si.binding); }));
+                    info.forEach(ls => ls.forEach(si => { if (si.def) items.defs.push(si.def); }));
                     info.forEach(ls => ls.forEach(si => { if (si.kind) kind = si.kind; })); // HACK
                     console.log(JSON.stringify(items, null, 2));
                     legend.innerHTML = generateListItems(kind, items);
@@ -944,7 +958,7 @@
                "user-select: none;"
                "}\n"))
            (fprintf op ".navigation { position:sticky; top:0; background-color:~a; }\n" bg)
-           (fprintf op ".legend { font-family: sans-serif; position:sticky; top:5em; float:right; text-align:left; width: 30em; background: rgba(100, 100, 200, .1); }\n")
+           (fprintf op ".legend { font-family: sans-serif; position:fixed; top:1em; right: 0px; text-align:left; width: 30em; background: rgba(255, 255, 255, .9); }\n")
            (fprintf op ".legend ul { padding-left: 2em; margin-top: .5em; }\n")
            (fprintf op "#filename { font-size: 12pt; }\n")
            (fprintf op ".highlight { background-color: yellow; animation: pulse ~fs ease; }\n" (/ animation-duration 1000))
