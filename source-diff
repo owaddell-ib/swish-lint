@@ -393,6 +393,7 @@
             ;;      - maybe it was enough that we added the global-ref at the export point?
             (when src
               (printf "Wow, got source for interface-info ~s ~s: ~s\n" (interface-info-kind node) (interface-info-name node) src)
+              ;; TODO consider using source for the library name / module name here [needs update to s/syntax.ss]
               (add-source-info! src
                 (json:make-object
                  [kind (symbol->string (interface-info-kind node))]
