@@ -343,6 +343,8 @@
    [(not x) #f]
    [else (json:make-object [not-source (format "~s" x)])]))
 
+(define (get-source x) (and (annotation? x) (annotation-source x)))
+
 (cond
  [(opt 'help)
   (display-help (app:name) cli (opt))
@@ -387,19 +389,21 @@
                  [refs (map maybe-source->json (identifier-info-ref* node))]
                  [sets (map maybe-source->json (identifier-info-set* node))]))))]
          [(interface-info? node)
-          (let ([src (interface-info-src node)]
+          (let ([src (interface-info-src node)]                ;; e.g., source for entire library
+                [def (get-source (interface-info-name node))]  ;; e.g., source for library name
                 [kind (symbol->string (interface-info-kind node))])
-            (for-each (add-edge 'def kind src) (interface-info-ref* node))
+            (for-each (add-edge 'def kind def) (interface-info-ref* node))
             ;; TODO what should we do with interface-info-impreq*
             ;; TODO what should we do with interface-info-export*
             ;;      - maybe it was enough that we added the global-ref at the export point?
-            (when src
+            (when (or def src)
               (printf "Wow, got source for interface-info ~s ~s: ~s\n" (interface-info-kind node) (interface-info-name node) src)
               ;; TODO consider using source for the library name / module name here [needs update to s/syntax.ss]
-              (add-source-info! src
+              (add-source-info! (or def src)
                 (json:make-object
                  [kind kind]
                  [refs (map maybe-source->json (interface-info-ref* node))]
+                 [src (maybe-source->json src)]
                  ))))]
          [else (printf "some other node: ~s\n" node)]))
       (foreach ([prim prim*])
