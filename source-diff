@@ -656,13 +656,27 @@
                     if (!info) { updateLegend([]); return; }
                     event.target.classList.add('highlight');
                     showInfo(event.target.id, info);
-                    const pretty = JSON.stringify(info, null, 2);
+                    // const pretty = JSON.stringify(info, null, 2);
                     // console.log(pretty);
                     updateLegend(info);
                   }
+                  function handleClick(event) {
+                    if (event.button === 0) {
+                      // TERRIBLE
+                      const legend = document.getElementById('legend');
+                      if (!legend) return;
+                      const info = infoDictionary[event.target.id] || "Rats. Nothing.";
+                      const output = JSON.stringify(info, null, 2);
+                      console.log(`Clicked on ${event.target}`, output);
+                      legend.innerHTML = `<pre>${output}</pre>`;
+                    }
+                  }
                   document.addEventListener('DOMContentLoaded', fetchData);
                   document.addEventListener('DOMContentLoaded', () => {
-                    document.querySelectorAll('span').forEach(span => span.addEventListener('mouseover', handleMouseOver));
+                    document.querySelectorAll('span').forEach(span => {
+                      span.addEventListener('mouseover', handleMouseOver);
+                      span.addEventListener('click', handleClick);
+                    });
                     scrollToElement(myTargetBFP);
                   });
                    |#)
@@ -720,8 +734,7 @@
            (let ([pinfo (find (lambda (x) (json:ref x 'prim #f)) info)])
              (and pinfo (json:ref pinfo 'mode #f))))
          (define (start-span counts info)
-           (fprintf op "<span title=~s id=\"bfp~a\" class=\"~@[prim~a ~]~{c~a~^ ~}\">"
-             (html:encode (json:object->string info))
+           (fprintf op "<span id=\"bfp~a\" class=\"~@[prim~a ~]~{c~a~^ ~}\">"
              (car counts)
              (get-prim-class info)
              counts))
@@ -960,6 +973,7 @@
            (fprintf op ".navigation { position:sticky; top:0; background-color:~a; }\n" bg)
            (fprintf op ".legend { font-family: sans-serif; position:fixed; top:1em; right: 0px; text-align:left; width: 30em; background: rgba(255, 255, 255, .9); }\n")
            (fprintf op ".legend ul { padding-left: 2em; margin-top: .5em; }\n")
+           (fprintf op ".legend pre { font-size: 8pt; }\n")
            (fprintf op "#filename { font-size: 12pt; }\n")
            (fprintf op ".highlight { background-color: yellow; animation: pulse ~fs ease; }\n" (/ animation-duration 1000))
            (fprintf op "@keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }\n")
