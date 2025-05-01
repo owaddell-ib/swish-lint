@@ -368,26 +368,28 @@
         (when (source-object? src)
           (let ([cell (source-table-cell st src '())])
             (set-cdr! cell (cons info (cdr cell))))))
-      (define (add-edge edge-type ref-src)
-        (define binding (json:make-object [,edge-type (maybe-source->json ref-src)]))
+      (define (add-edge edge-type kind ref-src)
+        (define binding (json:make-object [kind kind] [,edge-type (maybe-source->json ref-src)]))
         (lambda (use-src)
           (add-source-info! use-src binding)))
       (foreach ([node node*])
         (cond
          [(identifier-info? node) ;; TODO oh boy
           ;; BARF not even close to what we actually want
-          (let ([def (identifier-info-def node)])
-            (for-each (add-edge 'def def) (identifier-info-ref* node))
-            (for-each (add-edge 'def def) (identifier-info-set* node))
+          (let ([def (identifier-info-def node)]
+                [kind (symbol->string (identifier-info-kind node))])
+            (for-each (add-edge 'def kind def) (identifier-info-ref* node))
+            (for-each (add-edge 'def kind def) (identifier-info-set* node))
             (when def
               (add-source-info! def
                 (json:make-object
-                 [kind (symbol->string (identifier-info-kind node))]
+                 [kind kind]
                  [refs (map maybe-source->json (identifier-info-ref* node))]
                  [sets (map maybe-source->json (identifier-info-set* node))]))))]
          [(interface-info? node)
-          (let ([src (interface-info-src node)])
-            (for-each (add-edge 'def src) (interface-info-ref* node))
+          (let ([src (interface-info-src node)]
+                [kind (symbol->string (interface-info-kind node))])
+            (for-each (add-edge 'def kind src) (interface-info-ref* node))
             ;; TODO what should we do with interface-info-impreq*
             ;; TODO what should we do with interface-info-export*
             ;;      - maybe it was enough that we added the global-ref at the export point?
@@ -396,7 +398,7 @@
               ;; TODO consider using source for the library name / module name here [needs update to s/syntax.ss]
               (add-source-info! src
                 (json:make-object
-                 [kind (symbol->string (interface-info-kind node))]
+                 [kind kind]
                  [refs (map maybe-source->json (interface-info-ref* node))]
                  ))))]
          [else (printf "some other node: ~s\n" node)]))
@@ -637,6 +639,7 @@
                   function updateLegend(info) {
                     const legend = document.getElementById('legend');
                     if (!legend) return;
+                    if (!info) { legend.innerHTML = ''; return; }
                     var items = {defs: [], refs: [], sets: []};
                     var kind = '';
                     // Such horrible hackery; handle edge-type we used in (add-edge ...)
@@ -645,7 +648,9 @@
                     info.forEach(ls => ls.forEach(si => { if (si.def) items.defs.push(si.def); }));
                     info.forEach(ls => ls.forEach(si => { if (si.kind) kind = si.kind; })); // HACK
                     console.log(JSON.stringify(items, null, 2));
-                    legend.innerHTML = generateListItems(kind, items);
+                    var found = 0;
+                    for (const key in items) { found += items[key].length; }
+                    legend.innerHTML = (0 == found) ? '' : generateListItems(kind, items);
                   }
                   function handleMouseOver(event) {
                     const info = infoDictionary[event.target.id];
@@ -654,12 +659,12 @@
                     document.querySelectorAll('.highlightrefs').forEach(x => x.classList.remove('highlightrefs'));
                     document.querySelectorAll('.highlightsets').forEach(x => x.classList.remove('highlightsets'));
                     document.querySelectorAll('.highlightbinding').forEach(x => x.classList.remove('highlightbinding'));
-                    if (!info) { updateLegend([]); return; }
+                    updateLegend(info);
+                    if (!info) return;
                     event.target.classList.add('highlight');
                     showInfo(event.target.id, info);
                     // const pretty = JSON.stringify(info, null, 2);
                     // console.log(pretty);
-                    updateLegend(info);
                   }
                   function handleClick(event) {
                     if (event.button === 0) {
@@ -972,7 +977,7 @@
                "user-select: none;"
                "}\n"))
            (fprintf op ".navigation { position:sticky; top:0; background-color:~a; }\n" bg)
-           (fprintf op ".legend { font-family: sans-serif; position:fixed; top:1em; right: 0px; text-align:left; width: 30em; background: rgba(255, 255, 255, .9); }\n")
+           (fprintf op ".legend { padding: 8px; font-family: sans-serif; position:fixed; top:1em; right: 0px; text-align:left; width: 30em; background: rgba(255, 255, 255, .9); }\n")
            (fprintf op ".legend ul { padding-left: 2em; margin-top: .5em; }\n")
            (fprintf op ".legend pre { font-size: 8pt; }\n")
            (fprintf op "#filename { font-size: 12pt; }\n")
