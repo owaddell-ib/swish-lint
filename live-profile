@@ -36,6 +36,7 @@
 (define cli
   (cli-specs
    default-help
+   [import-hack --import-hack (string "<filename>") "import JSON profile output hackery"]
    [import |-i| --import (string "<filename>") "import covout file"]
    [scan-profile --scan (string "<filename>") "import profile data from experimental source-table profiling version of Swish"]
    [merge -m --merge bool "merge data into existing database"]
@@ -45,6 +46,43 @@
    ))
 
 (define opt (parse-command-line-arguments cli))
+
+(define (import-hack filename)
+  (define (ingest i name key obj)
+    (build-database (or (> i 0) (opt 'merge))
+      (lambda (meta)
+        (match (json:ref obj key #f)
+          [#f (printf "no key ~s in obj for ~s\n" key name)]
+          [,str
+           (define st (make-source-table))
+           (define ip (open-input-string str))
+           (match (begin #; try (get-source-table! ip st))
+             [`(catch ,r) (printf "Ignoring: ~a\n" (exit-reason->english r))]
+             [,_ (import-coverage st meta)])]))
+      (json:make-object
+       [filename filename]
+       [note
+        (let ([op (open-output-string)])
+          (json:write-object op #f json:write
+            [i i]
+            [transformer (coerce name)]
+            [inputs (json:ref obj 'inputs #f)]
+            [stage (coerce key)]
+            [note (opt 'note)])
+          (get-output-string op))])))
+  (time
+   (let ([ip (open-file-to-read filename)])
+     (on-exit (close-port ip)
+       (let lp ([i 0])
+         (match (json:read ip)
+           [#!eof (void)]
+           [,obj
+            ;; TODO get more interesting info that transformer name for meta
+            (let ([name (json:ref obj 'transformer-name "?transformer-name?")])
+              (ingest i name 'deps-profile obj)
+              (ingest i name 'transform-profile obj))
+            (lp (+ i 1))])))))
+  (exit 0))
 
 (define (import-covout filename meta)
   (define src-table (make-source-table))
@@ -361,6 +399,8 @@
         [filename filename]
         [note (opt 'note)])))
     (exit 0))]
+ [(opt 'import-hack) => import-hack]
+ #;            
  [(opt 'scan-profile) =>
   (lambda (profile)
     (define merge? (opt 'merge))
@@ -875,7 +915,8 @@
                "-ms-user-select: none;"
                "user-select: none;"
                "}\n"))
-           (fprintf op ".navigation { position:sticky; top:0; background-color:~a; }\n" bg)
+           ;; TODO terrible styling but the dratted navigation panel was completely covering the code
+           (fprintf op ".navigation { position:fixed; top:200px; right: 0; max-width: 50em; height: 50em; overflow-y: auto; background-color:~a; }\n" bg)
            (fprintf op ".legend { position:sticky; top:0; float:right; text-align:right; }\n")
            (fprintf op ".cov_low { color: #FF0000; }\n")
            (fprintf op ".cov_medium { color: #FF8800; }\n")
