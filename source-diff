@@ -385,7 +385,12 @@
       (define (add-show-imported-query client-src)
         (lambda (import-src)
           (add-source-info! import-src
-            (json:make-object [show-imported (maybe-source->json client-src)]))))
+            (json:make-object [show_imported (maybe-source->json client-src)]))))
+      (define (json-sanitize name)
+        (format "~a"
+         (if (annotation? name)
+             (annotation-expression name)
+             name)))
       (foreach ([node node*])
         (cond
          [(identifier-info? node) ;; TODO oh boy
@@ -398,6 +403,7 @@
               (add-source-info! def
                 (json:make-object
                  [kind kind]
+                 [name (json-sanitize (identifier-info-name node))]
                  [refs (map maybe-source->json (identifier-info-ref* node))]
                  [sets (map maybe-source->json (identifier-info-set* node))]))))]
          [(interface-info? node)
@@ -414,6 +420,7 @@
               (add-source-info! (or def src)
                 (json:make-object
                  [kind kind]
+                 [name (json-sanitize (interface-info-name node))]
                  [refs (map maybe-source->json (interface-info-ref* node))]
                  [src (maybe-source->json src)]
                  ))))]
@@ -685,6 +692,7 @@
                   var throwAwayQueryInput = [];
                   function throwAwayQuery(endpoint, idx) {
                     const qi = throwAwayQueryInput;
+                    console.log('CLICK using:', qi);
                     if (qi.length <= idx) { console.log(`No query for index ${idx} in:`, qi); return; }
                     fetch(endpoint, {
                       method: 'POST',
@@ -693,20 +701,17 @@
                     })
                     .then(() => { console.log('ignoring whatever the response was'); })
                     .catch(err => { console.log('ERROR', err); });
+                    throwAwayQueryInput = [];
                   }
                   function makeLinks(info) {
-                    var foo = { show_imported: [], kind: [] };
+                    var foo = { show_imported: [], kind: [], by: myFilename };
                     info.forEach(ls => ls.forEach(node => {
-                      if (node['show-imported']) foo.show_imported.push(node);
+                      if (node['show_imported']) foo.show_imported.push(node);
                       if (node.kind) foo.kind.push(node);
                     }));
                     if (foo.show_imported.length == 0) return '';
-                    // HACK HACK HACK
-                    console.log("FOO is:", foo);  
-                    if (foo.kind && foo.kind[0].def) {
-                      foo.import = infoDictionary['bfp' + foo.kind[0].def.bfp];
-                    }
-                    throwAwayQueryInput = [ foo ];
+                    console.log("Button will use:", foo);
+                    throwAwayQueryInput.push(foo);
                     return `<button onclick="throwAwayQuery('/show-imported', 0)">show imported</a>`;
                   }
                   function handleClick(event) {
@@ -1075,14 +1080,8 @@
          (lambda (ip op)
            (define obs (list 0)) ;; TODO HACK, should be getting from param or something
            (define req (json:bytevector->object (get-bytevector-exactly-n ip len)))
-           (define show-imported (json:ref req 'show-imported #f))
-           (define target (json:ref req 'import #f))
-           (define path
-             (cond
-              [(not target) #f]
-              [(ormap (lambda (ls) (find (lambda (x) (json:ref x 'src #f)) ls)) target) =>
-               (lambda (x) (json:ref x '(src sfd path) #f))]
-              [else #f]))
+           (define show-imported (json:ref req 'show_imported #f))
+           (define target (json:ref req 'by #f))
            (define (trace-execute query . args)
              (printf "query:\n~a\n" query)
              (let ([result (apply execute query args)])
@@ -1096,6 +1095,18 @@
              (transaction 'db
                (apply trace-execute
                  (format
+
+;; TODO this is a decent demonstration that we just want the stupid macro system to give us the information itself
+
+;; TODO left off here
+;;       - use something like query on the right to find all non-lexcials in the show-imported file (that's the library
+;;         containing definitions we care about, so use it's range)
+;;            ---> OH, BUT THIS IS GOING TO MISS ALL THE IDENTIFIERS THAT HAD NO SOURCE
+;;                 BECAUSE THEY WILL BE OUTSIDE THE RANGE OF THE LIBRARY bfp / efp
+;;       - that will give a table of name, rng_pk, src_pk for our library exports
+;;       - then we do an inner join with the references in our current (target) file
+;;         - everything that has a binding pointing into that other file
+
                   (ct:join #\newline
                     "select fp.obs_fk, fp.src_fk, fp.rng_fk, info.value as alex from"
                     "fact_profile fp,"
