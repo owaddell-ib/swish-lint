@@ -429,6 +429,24 @@
                  [kind kind]
                  [name (json-sanitize (interface-info-name node))]
                  [refs (map maybe-source->json (interface-info-ref* node))]
+                 [exports
+                  (map
+                   (lambda (x)
+                     (cond
+                      [(identifier-info? x)
+                       (json:make-object
+                        [export (coerce (identifier-info-name x))]
+                        [kind (coerce (identifier-info-kind x))]
+                        [src (maybe-source->json (identifier-info-def x))])]
+                      [(interface-info? x)
+                       (json:make-object
+                        [export (coerce (interface-info-name x))]
+                        [kind (coerce (interface-info-kind x))]
+                        [src (maybe-source->json (interface-info-src x))])]
+                      [else
+                       (json:make-object
+                        [export "??? unknown ???"])]))
+                   (interface-info-export* node))]
                  [src (maybe-source->json src)]
                  ))))]
          [else (printf "some other node: ~s\n" node)]))
@@ -678,18 +696,34 @@
                     if (!info) { legend.innerHTML = ''; return; }
                     var items = {defs: [], refs: [], sets: []};
                     var kind = '';
+                    var exportRefs = [];
                     // Such horrible hackery; handle edge-type we used in (add-edge ...)
                     info.forEach(ls => ls.forEach(si => (si.refs || []).forEach(src => { if (!src.bfp) return; items.refs.push(src); }) ))
                     info.forEach(ls => ls.forEach(si => (si.sets || []).forEach(src => { if (!src.bfp) return; items.sets.push(src); }) ))
                     info.forEach(ls => ls.forEach(si => { if (si.def) items.defs.push(si.def); }));
                     info.forEach(ls => ls.forEach(si => { if (si.kind) kind = si.kind; })); // HACK
+                    // look for exports of this library / module that we used
+                    const where = items.defs.find(x => x.sfd);
+                    if ((kind == 'library' || kind == 'module') && where) {
+                      for (const key in infoDictionary.file_info) {
+                        const hit = infoDictionary.file_info[key];
+                        if (!hit) continue;
+                        hit.forEach(ls => ls.forEach(obj => {
+                          if (obj.def && obj.def.sfd.path == where.sfd.path) {
+                             console.log('Maybe a hit?', obj, where);
+                             exportRefs.push(hit);
+                          }
+                        }));
+                      }
+                      if (exportRefs.length > 0) items.exportRefs = exportRefs;
+                    }
                     console.log(JSON.stringify(items, null, 2));
                     var found = 0;
                     for (const key in items) { found += items[key].length; }
                     legend.innerHTML = (0 == found) ? '' : generateListItems(kind, items);
                   }
                   function handleMouseOver(event) {
-                    const info = infoDictionary[event.target.id];
+                    const info = infoDictionary.file_info[event.target.id];
                     document.querySelectorAll('.highlight').forEach(x => x.classList.remove('highlight'));
                   // TODO horrible
                     document.querySelectorAll('.highlightrefs').forEach(x => x.classList.remove('highlightrefs'));
@@ -707,7 +741,7 @@
                       // TERRIBLE
                       const legend = document.getElementById('legend');
                       if (!legend) return;
-                      const info = infoDictionary[event.target.id];
+                      const info = infoDictionary.file_info[event.target.id];
                       const output = JSON.stringify(info || "Rats. Nothing.", null, 2);
                       console.log(`Clicked on ${event.target}`, output);
                       legend.innerHTML = `<pre>${output}</pre>`;
@@ -888,30 +922,38 @@
                   (execute "select src_filename from dim_source where src_pk=?" src))
            [() (not-found conn)]
            [(#(,filename))
-            (define data
+            (match-define (#(,data))
               (transaction 'db
                 (apply execute
                   (format
-                   (ct:join " "
-                     "select rng_bfp, json_group_array(json(fp.info))"
-                     "from fact_profile fp"
-                     "inner join dim_range on rng_pk=fp.rng_fk"
-                     "where fp.src_fk=?"
-                     "and fp.obs_fk in (~a)"
-                     "group by rng_bfp, rng_efp"
-                     "order by rng_bfp")
+                   ;; TODO wonder if there's some way to avoid the json(file_info) stuff
+                   (ct:join #\newline
+                     "select json_object('file_info', json(file_info), 'export_info', json(export_info)) from"
+                     "(select json_group_object('bfp' || rng_bfp, json(details)) as file_info"
+                     " from"
+                     " (select rng_bfp, json_group_array(json(fp.info)) as details"
+                     "  from fact_profile fp"
+                     "  inner join dim_range on rng_pk=fp.rng_fk"
+                     "  where fp.src_fk=?"
+                     "  and fp.obs_fk in (~a)"
+                     "  group by rng_bfp, rng_efp"
+                     "  order by rng_bfp))"
+                     ","
+                     "(select json_group_array(json_object('filename', src_filename, 'checksum', src_checksum, 'exports', json(exports))) as export_info"
+                     "  from"
+                     "  (select src_filename, src_checksum, json_extract(X.value, '$.exports') as exports"
+                     "    from fact_profile"
+                     "       , dim_source"
+                     "       , json_each(info) X  -- from fact_profile"
+                     "     where src_pk = src_fk"
+                     "     and exports is not null"
+                     "     and obs_fk = 1))  --- HACK"
+                     )
                    (template obs))
                   src
                   obs)))
             (http:respond conn 200 '(("Content-Type" . "text/html"))
-              (json:object->bytevector
-               (let ([obj (json:make-object)])
-                 (for-each
-                  (lambda (row)
-                    (match-let* ([#(,bfp ,json-txt) row])
-                      (json:set! obj (string->symbol (format "bfp~a" bfp)) (json:string->object json-txt))))
-                  data)
-                 obj)))])))]
+              (string->utf8 data))])))]
      [/findsource
       (http:url-handler
        (let ([path (http:get-param 'path params)]
