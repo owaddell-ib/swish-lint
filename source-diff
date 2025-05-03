@@ -372,8 +372,15 @@
             (set-cdr! cell (cons info (cdr cell))))))
       (define (add-edge edge-type kind ref-src)
         (define binding (json:make-object [kind kind] [,edge-type (maybe-source->json ref-src)]))
-        (lambda (use-src)
-          (add-source-info! use-src binding)))
+        (lambda (use)
+          (and use
+               (let ([use-src
+                      (cond
+                       [(or (source-object? use) (annotation? use)) use]
+                       [(identifier-info? use) (identifier-info-def use)]
+                       [(interface-info? use) (interface-info-def use)]
+                       [else (errorf #f "can't determine use-src from ~s\n" use)])])
+                 (add-source-info! use-src binding)))))
       ;; TODO important(?) this will get the wrong answer if we use (import (except (foo) bar)) and also use (import (foo))
       ;;      --> it's "wrong" because we currently get the import source for the entire import spec
       ;;      - maybe add-import! should also give us the source for the specific library/module import
@@ -578,6 +585,12 @@
        (define (get-info row) (json:string->object (vector-ref row 2)))
        (define-values (op get) (open-bytevector-output-port (make-utf8-transcoder)))
 
+   
+(printf "LEFT OFF HERE:\n")
+(printf " - realized we might be able to look at the interface-info-export*\n")
+(printf " - those should be linked to identifier-info (or we should be able to)\n")
+(printf " - so we could look for uses of those identifiers with source inside our library\n")
+   
        (fprintf op
          (ct:join #\newline
            "<!DOCTYPE html>"
@@ -689,31 +702,6 @@
                     // const pretty = JSON.stringify(info, null, 2);
                     // console.log(pretty);
                   }
-                  var throwAwayQueryInput = [];
-                  function throwAwayQuery(endpoint, idx) {
-                    const qi = throwAwayQueryInput;
-                    console.log('CLICK using:', qi);
-                    if (qi.length <= idx) { console.log(`No query for index ${idx} in:`, qi); return; }
-                    fetch(endpoint, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(qi[idx])
-                    })
-                    .then(() => { console.log('ignoring whatever the response was'); })
-                    .catch(err => { console.log('ERROR', err); });
-                    throwAwayQueryInput = [];
-                  }
-                  function makeLinks(info) {
-                    var foo = { show_imported: [], kind: [], by: myFilename };
-                    info.forEach(ls => ls.forEach(node => {
-                      if (node['show_imported']) foo.show_imported.push(node);
-                      if (node.kind) foo.kind.push(node);
-                    }));
-                    if (foo.show_imported.length == 0) return '';
-                    console.log("Button will use:", foo);
-                    throwAwayQueryInput.push(foo);
-                    return `<button onclick="throwAwayQuery('/show-imported', 0)">show imported</a>`;
-                  }
                   function handleClick(event) {
                     if (event.button === 0) {
                       // TERRIBLE
@@ -722,7 +710,7 @@
                       const info = infoDictionary[event.target.id];
                       const output = JSON.stringify(info || "Rats. Nothing.", null, 2);
                       console.log(`Clicked on ${event.target}`, output);
-                      legend.innerHTML = `<pre>${output}</pre>` + makeLinks(info);
+                      legend.innerHTML = `<pre>${output}</pre>`;
                     }
                   }
                   document.addEventListener('DOMContentLoaded', fetchData);
@@ -1069,76 +1057,12 @@
          (http:respond conn 200 '(("Content-Type" . "text/css")) (get))))]
      ))
 
-  (define post-hacks
-    (json:make-object
-     [/show-imported
-      (http:url-handler
-       (define len (string->number (http:get-header "Content-Length" header)))
-       (printf "/show-imported got ~s content\n" len)
-       (printf "request: ~s\n" request)
-       (http:call-with-ports conn
-         (lambda (ip op)
-           (define obs (list 0)) ;; TODO HACK, should be getting from param or something
-           (define req (json:bytevector->object (get-bytevector-exactly-n ip len)))
-           (define show-imported (json:ref req 'show_imported #f))
-           (define target (json:ref req 'by #f))
-           (define (trace-execute query . args)
-             (printf "query:\n~a\n" query)
-             (let ([result (apply execute query args)])
-               (pretty-print result)
-               result))
-           (json:pretty req)
-           (printf "show-imported: ~a\n" (json:object->string show-imported))
-           (printf "target: ~a\n" (json:object->string target))
-           (printf "path: ~a\n" path)
-           (when path
-             (transaction 'db
-               (apply trace-execute
-                 (format
-
-;; TODO this is a decent demonstration that we just want the stupid macro system to give us the information itself
-
-;; TODO left off here
-;;       - use something like query on the right to find all non-lexcials in the show-imported file (that's the library
-;;         containing definitions we care about, so use it's range)
-;;            ---> OH, BUT THIS IS GOING TO MISS ALL THE IDENTIFIERS THAT HAD NO SOURCE
-;;                 BECAUSE THEY WILL BE OUTSIDE THE RANGE OF THE LIBRARY bfp / efp
-;;       - that will give a table of name, rng_pk, src_pk for our library exports
-;;       - then we do an inner join with the references in our current (target) file
-;;         - everything that has a binding pointing into that other file
-
-                  (ct:join #\newline
-                    "select fp.obs_fk, fp.src_fk, fp.rng_fk, info.value as alex from"
-                    "fact_profile fp,"
-                    "json_each(fp.info) info"
-                    "where json_extract(info.value, '$.kind') <> 'lexical'"
-                    "and fp.src_fk in ("
-                    "  select src_pk"
-                    "  from dim_source"
-                    "  inner join fact_profile on src_pk = src_fk"
-                    "  where src_filename = ?"
-                    "  and obs_fk in (~a)"
-                    "  limit 1"
-                    ")"
-                    )
-                  (template obs))
-                 path
-                 obs)
-               ))
-           )
-         1000)
-       (http:respond conn 200 '() '#vu8())
-       )]))
-
   (http:add-server 'http (cond [(opt 'port) => string->number] [else 9002])
     (http:url-handler
      (<request> open request [method path])
      (cond
       [(and (eq? method 'GET)
             (json:ref pages (string->symbol path) #f)) =>
-       (lambda (h) (http:call-url-handler h))]
-      [(and (eq? method 'POST)
-            (json:ref post-hacks (string->symbol path) #f)) =>
        (lambda (h) (http:call-url-handler h))]
       [else
        (not-found conn)]))))
