@@ -438,13 +438,13 @@
                      (cond
                       [(identifier-info? x)
                        (json:make-object
-                        [export (coerce (identifier-info-name x))]
-                        [kind (coerce (identifier-info-kind x))]
+                        [export (json-sanitize (identifier-info-name x))]
+                        [kind (json-sanitize (identifier-info-kind x))]
                         [src (maybe-source->json (identifier-info-def x))])]
                       [(interface-info? x)
                        (json:make-object
-                        [export (coerce (interface-info-name x))]
-                        [kind (coerce (interface-info-kind x))]
+                        [export (json-sanitize (interface-info-name x))]
+                        [kind (json-sanitize (interface-info-kind x))]
                         [src (maybe-source->json (interface-info-src x))])]
                       [else
                        (json:make-object
@@ -735,21 +735,24 @@ console.log("makeSourceLink item =", item);
                     // look for exports of this library / module that we used
                     const where = findObjectWithKey('show_imported', info);
                     if (where.show_imported) {
-                      console.log('found where.show_imported =', where.show_imported);   
-                      const me = findObjectWithKey('def', info);
+                      console.log('found where.show_imported in', where);   
+                      const realm = where.show_imported;
                       for (const key in infoDictionary.file_info) {
                         const hit = infoDictionary.file_info[key];
                         if (!hit) continue;
+                        const ref_bfp = +key.match(/\d+/)[0];  // barf, decode the bfp out of key
                         hit.forEach(ls => ls.forEach(obj => {
                           // TODO also filter out obj if its a reference within the where.show_imported stuff
                           //      so that we handle natural string properly
                           // BARF: that currently involves parsing the key to lop off 'bfp' prefix
-                          if ((obj.def && obj.def.sfd.path == where.show_imported.sfd.path) &&
-                              (obj.def.bfp >= where.show_imported.bfp) &&
-                              (obj.def.efp <= where.show_imported.efp) &&
-                              (obj.def.bfp != me.def.bfp)) {
+                          if ((obj.def && obj.def.sfd.path == realm.sfd.path) &&
+                              (obj.def.bfp >= realm.bfp) &&
+                              (obj.def.efp <= realm.efp) &&
+                              // exclude references within the module bounds of "show_imported"
+                              !(myFilename == realm.sfd.path && realm.bfp <= ref_bfp && ref_bfp <= realm.efp)) {
                              console.log("---------------v");
-                             console.log(`Maybe hit? ${obj.def.bfp} vs. ${where.show_imported.bfp}, ${obj.def.efp} vs. ${where.show_imported.efp}`);
+                             console.log(`Maybe hit? ref_bfp=${ref_bfp} realm.bfp=${realm.bfp} realm.efp=${realm.efp} obj.bfp=${obj.def.bfp} vs. where.bfp=${where.show_imported.bfp}, obj.efp=${obj.def.efp} vs. where.efp=${where.show_imported.efp}`);
+                             console.log('myfilename', myFilename);
                              console.log(JSON.stringify(obj, null, 2));   
                              console.log("---------------^");
                              exportRefs.push(hit);
@@ -785,7 +788,7 @@ console.log("makeSourceLink item =", item);
                       const info = infoDictionary.file_info[event.target.id];
                       const output = JSON.stringify(info || "Rats. Nothing.", null, 2);
                       console.log(`Clicked on ${event.target}`, output);
-                      legend.innerHTML = `<pre>${output}</pre>`;
+                      legend.innerHTML = `<pre>${encodeHtml(output)}</pre>`;
                     }
                   }
                   document.addEventListener('DOMContentLoaded', fetchData);
@@ -1096,7 +1099,7 @@ console.log("makeSourceLink item =", item);
                "user-select: none;"
                "}\n"))
            (fprintf op ".navigation { position:sticky; top:0; background-color:~a; }\n" bg)
-           (fprintf op ".legend { padding: 8px; font-family: sans-serif; position:fixed; top:1em; right: 0px; text-align:left; width: 30em; background: rgba(255, 255, 255, .9); }\n")
+           (fprintf op ".legend { padding: 8px; font-family: sans-serif; position:fixed; top:1em; right: 0px; text-align:left; width: 30em; height: 60em; overflow-x: auto; overflow-y: auto; background: rgba(255, 255, 255, .9); }\n")
            (fprintf op ".legend ul { padding-left: 2em; margin-top: .5em; }\n")
            (fprintf op ".legend pre { font-size: 8pt; }\n")
            (fprintf op "#filename { font-size: 12pt; }\n")
