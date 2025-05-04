@@ -370,8 +370,8 @@
         (when (source-object? src)
           (let ([cell (source-table-cell st src '())])
             (set-cdr! cell (cons info (cdr cell))))))
-      (define (add-edge edge-type kind ref-src)
-        (define binding (json:make-object [kind kind] [,edge-type (maybe-source->json ref-src)]))
+      (define (add-edge edge-type kind name ref-src)
+        (define binding (json:make-object [kind kind] [name name] [,edge-type (maybe-source->json ref-src)]))
         (lambda (use)
           (and use
                (let ([use-src
@@ -395,29 +395,31 @@
             (json:make-object [show_imported (maybe-source->json client-src)]))))
       (define (json-sanitize name)
         (format "~a"
-         (if (annotation? name)
-             (annotation-expression name)
-             name)))
+          (if (annotation? name)
+              (annotation-stripped name)
+              name)))
       (foreach ([node node*])
         (cond
          [(identifier-info? node) ;; TODO oh boy
           ;; BARF not even close to what we actually want
           (let ([def (identifier-info-def node)]
-                [kind (symbol->string (identifier-info-kind node))])
-            (for-each (add-edge 'def kind def) (identifier-info-ref* node))
-            (for-each (add-edge 'def kind def) (identifier-info-set* node))
+                [kind (symbol->string (identifier-info-kind node))]
+                [name (json-sanitize (identifier-info-name node))])
+            (for-each (add-edge 'def kind name def) (identifier-info-ref* node))
+            (for-each (add-edge 'def kind name def) (identifier-info-set* node))
             (when def
               (add-source-info! def
                 (json:make-object
                  [kind kind]
-                 [name (json-sanitize (identifier-info-name node))]
+                 [name name]
                  [refs (map maybe-source->json (identifier-info-ref* node))]
                  [sets (map maybe-source->json (identifier-info-set* node))]))))]
          [(interface-info? node)
           (let ([src (interface-info-src node)]                ;; e.g., source for entire library
                 [def (get-source (interface-info-name node))]  ;; e.g., source for library name
-                [kind (symbol->string (interface-info-kind node))])
-            (for-each (add-edge 'def kind def) (interface-info-ref* node))
+                [kind (symbol->string (interface-info-kind node))]
+                [name (json-sanitize (interface-info-name node))])
+            (for-each (add-edge 'def kind name def) (interface-info-ref* node))
             (for-each (add-show-imported-query src) (interface-info-ref* node))
             ;; TODO what should we do with interface-info-impreq*
             ;; TODO what should we do with interface-info-export*
@@ -427,7 +429,7 @@
               (add-source-info! (or def src)
                 (json:make-object
                  [kind kind]
-                 [name (json-sanitize (interface-info-name node))]
+                 [name name]
                  [refs (map maybe-source->json (interface-info-ref* node))]
               ;; [realm-src (maybe-source->json src)]
                  [exports
@@ -628,6 +630,14 @@
            (format "const myTargetBFP = 'bfp~a';" target-bfp)
            (format "const animationDuration = ~f;" animation-duration)
            (extract-block-comment #|
+                  function encodeHtml(str) {
+                    if (!str) return str;
+                    return str.replace(/&/g, '&amp;')
+                              .replace(/</g, '&lt;')
+                              .replace(/>/g, '&gt;')
+                              .replace(/"/g, '&quot;')
+                              .replace(/'/g, '&#039;');
+                  }
                   function showSource(field) {
                     return src => {
                       if (!src) return;
@@ -669,21 +679,23 @@
                     ls.forEach(sub => sub.forEach(x => { if (x.hasOwnProperty(key)) { hit = x } }));
                     return hit;
                   }
-                  function makeSourceLinkHelp(item) {
+                  function makeSourceLinkHelp(item, name) {
+console.log("makeSourceLinkHelp item =", item, name);   
                     if (!item.bfp) { return '<span>?</span>'; }
                     if ((item.sfd.crc != myChecksum) || (item.sfd.path != myFilename)) {
                       const encoded = encodeURIComponent(item.sfd.path);
-                      return `<a href='/findsource?obs=${myObs}&path=${encoded}&bfp=${item.bfp}'>${getFilename(item.sfd.path)}:${item.bfp}</a>`;
+                      return `<a href='/findsource?obs=${myObs}&path=${encoded}&bfp=${item.bfp}'>${encodeHtml(name) || getFilename(item.sfd.path) + ':' + item.bfp}</a>`;
                     }
-                    return `<span class="internalLink" onClick="scrollToElement('bfp${item.bfp}')">${item.bfp}</span>`;
+                    return `<span class="internalLink" onClick="scrollToElement('bfp${item.bfp}')">${encodeHtml(name) || item.bfp}</span>`;
                   }
                   function makeSourceLink(item) {
+console.log("makeSourceLink item =", item);   
                     const hit = findObjectWithKey('def', item);
                     if (hit) { // link to imported id
                       const encoded = encodeURIComponent(hit.def.sfd.path);
-                      return makeSourceLinkHelp(hit.def);
+                      return makeSourceLinkHelp(hit.def, hit.name);
                     }
-                    return makeSourceLinkHelp(item);
+                    return makeSourceLinkHelp(item, false);
                   }
                   function scrollToElement(id) {
                     const element = document.getElementById(id);
@@ -695,8 +707,8 @@
                     // BARF: Match duration here with the animation duration in CSS
                     setTimeout(() => { element.classList.remove('highlight');}, animationDuration);
                   }
-                  function generateListItems(kind, obj) {
-                    let html = `<b>${kind}</b><ul>`;
+                  function generateListItems(kind, name, obj) {
+                    let html = `<span><b>${kind}</b> ${encodeHtml(name) || "?"}</span><ul>`;
                     for (const key in obj) {
                       if (Array.isArray(obj[key])) {
                          html += `<li>${key}: `;
@@ -712,16 +724,19 @@
                     if (!info) { legend.innerHTML = ''; return; }
                     var items = {defs: [], refs: [], sets: []};
                     var kind = '';
+                    var name = false;
                     var exportRefs = [];
                     // Such horrible hackery; handle edge-type we used in (add-edge ...)
                     info.forEach(ls => ls.forEach(si => (si.refs || []).forEach(src => { if (!src.bfp) return; items.refs.push(src); }) ))
                     info.forEach(ls => ls.forEach(si => (si.sets || []).forEach(src => { if (!src.bfp) return; items.sets.push(src); }) ))
                     info.forEach(ls => ls.forEach(si => { if (si.def) items.defs.push(si.def); }));
                     info.forEach(ls => ls.forEach(si => { if (si.kind) kind = si.kind; })); // HACK
+                    info.forEach(ls => ls.forEach(si => { if (si.name) name = si.name; })); // HACK
                     // look for exports of this library / module that we used
                     const where = findObjectWithKey('show_imported', info);
                     if (where.show_imported) {
                       console.log('found where.show_imported =', where.show_imported);   
+                      const me = findObjectWithKey('def', info);
                       for (const key in infoDictionary.file_info) {
                         const hit = infoDictionary.file_info[key];
                         if (!hit) continue;
@@ -731,7 +746,8 @@
                           // BARF: that currently involves parsing the key to lop off 'bfp' prefix
                           if ((obj.def && obj.def.sfd.path == where.show_imported.sfd.path) &&
                               (obj.def.bfp >= where.show_imported.bfp) &&
-                              (obj.def.efp <= where.show_imported.efp)) {
+                              (obj.def.efp <= where.show_imported.efp) &&
+                              (obj.def.bfp != me.def.bfp)) {
                              console.log("---------------v");
                              console.log(`Maybe hit? ${obj.def.bfp} vs. ${where.show_imported.bfp}, ${obj.def.efp} vs. ${where.show_imported.efp}`);
                              console.log(JSON.stringify(obj, null, 2));   
@@ -745,7 +761,7 @@
                     console.log(JSON.stringify(items, null, 2));
                     var found = 0;
                     for (const key in items) { found += items[key].length; }
-                    legend.innerHTML = (0 == found) ? '' : generateListItems(kind, items);
+                    legend.innerHTML = (0 == found) ? '' : generateListItems(kind, name, items);
                   }
                   function handleMouseOver(event) {
                     const info = infoDictionary.file_info[event.target.id];
