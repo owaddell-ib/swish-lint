@@ -661,13 +661,28 @@
                   function getFilename(path) {
                     return path.split(/[/\\]/).pop();
                   }
-                  function makeSourceLink(item) {
-                    if (!item.bfp) return '<span>?</span>';
+                  function findObjectWithKey(key, ls) {
+                    if (!Array.isArray(ls)) return false;
+                    var hit = false;
+                    // barf, all wrong
+                    ls.forEach(sub => sub.forEach(x => { if (x.hasOwnProperty(key)) { hit = x } }));
+                    return hit;
+                  }
+                  function makeSourceLinkHelp(item) {
+                    if (!item.bfp) { return '<span>?</span>'; }
                     if ((item.sfd.crc != myChecksum) || (item.sfd.path != myFilename)) {
                       const encoded = encodeURIComponent(item.sfd.path);
                       return `<a href='/findsource?obs=${myObs}&path=${encoded}&bfp=${item.bfp}'>${getFilename(item.sfd.path)}:${item.bfp}</a>`;
                     }
                     return `<span class="internalLink" onClick="scrollToElement('bfp${item.bfp}')">${item.bfp}</span>`;
+                  }
+                  function makeSourceLink(item) {
+                    const hit = findObjectWithKey('def', item);
+                    if (hit) { // link to imported id
+                      const encoded = encodeURIComponent(hit.def.sfd.path);
+                      return makeSourceLinkHelp(hit.def);
+                    }
+                    return makeSourceLinkHelp(item);
                   }
                   function scrollToElement(id) {
                     const element = document.getElementById(id);
@@ -715,7 +730,7 @@
                           }
                         }));
                       }
-                      if (exportRefs.length > 0) items.exportRefs = exportRefs;
+                      if (exportRefs.length > 0) items['export-refs'] = exportRefs;
                     }
                     console.log(JSON.stringify(items, null, 2));
                     var found = 0;
