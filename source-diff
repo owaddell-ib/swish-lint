@@ -429,6 +429,7 @@
                  [kind kind]
                  [name (json-sanitize (interface-info-name node))]
                  [refs (map maybe-source->json (interface-info-ref* node))]
+              ;; [realm-src (maybe-source->json src)]
                  [exports
                   (map
                    (lambda (x)
@@ -718,14 +719,23 @@
                     info.forEach(ls => ls.forEach(si => { if (si.def) items.defs.push(si.def); }));
                     info.forEach(ls => ls.forEach(si => { if (si.kind) kind = si.kind; })); // HACK
                     // look for exports of this library / module that we used
-                    const where = items.defs.find(x => x.sfd);
-                    if ((kind == 'library' || kind == 'module') && where) {
+                    const where = findObjectWithKey('show_imported', info);
+                    if (where.show_imported) {
+                      console.log('found where.show_imported =', where.show_imported);   
                       for (const key in infoDictionary.file_info) {
                         const hit = infoDictionary.file_info[key];
                         if (!hit) continue;
                         hit.forEach(ls => ls.forEach(obj => {
-                          if (obj.def && obj.def.sfd.path == where.sfd.path) {
-                             console.log('Maybe a hit?', obj, where);
+                          // TODO also filter out obj if its a reference within the where.show_imported stuff
+                          //      so that we handle natural string properly
+                          // BARF: that currently involves parsing the key to lop off 'bfp' prefix
+                          if ((obj.def && obj.def.sfd.path == where.show_imported.sfd.path) &&
+                              (obj.def.bfp >= where.show_imported.bfp) &&
+                              (obj.def.efp <= where.show_imported.efp)) {
+                             console.log("---------------v");
+                             console.log(`Maybe hit? ${obj.def.bfp} vs. ${where.show_imported.bfp}, ${obj.def.efp} vs. ${where.show_imported.efp}`);
+                             console.log(JSON.stringify(obj, null, 2));   
+                             console.log("---------------^");
                              exportRefs.push(hit);
                           }
                         }));
