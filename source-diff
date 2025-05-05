@@ -657,8 +657,12 @@
                     srcs.forEach(showSource(field));
                   }
                   function showInfo(id, info) {
+                    const ref = findObjectWithKey('def', info);
+                    if (ref) {
+                      showSource('def')(ref.def);
+                      info = infoDictionary.file_info['bfp'+ref.def.bfp] || info;
+                    }
                     info.forEach(ls => ls.forEach(si => { showSourceFor(si, 'refs'); showSourceFor(si, 'sets'); }));
-                    info.forEach(ls => ls.forEach(si => { if (si.binding) { console.log('here with', si);  showSource('binding')(si.binding) } }));
                   }
                   async function fetchData() {
                     try {
@@ -771,16 +775,14 @@ console.log("makeSourceLink item =", item);
                   function handleMouseOver(event) {
                     const info = infoDictionary.file_info[event.target.id];
                     document.querySelectorAll('.highlight').forEach(x => x.classList.remove('highlight'));
-                  // TODO horrible
+                    // TODO horrible
                     document.querySelectorAll('.highlightrefs').forEach(x => x.classList.remove('highlightrefs'));
                     document.querySelectorAll('.highlightsets').forEach(x => x.classList.remove('highlightsets'));
-                    document.querySelectorAll('.highlightbinding').forEach(x => x.classList.remove('highlightbinding'));
+                    document.querySelectorAll('.highlightdef').forEach(x => x.classList.remove('highlightdef'));
                     updateLegend(info);
                     if (!info) return;
                     event.target.classList.add('highlight');
                     showInfo(event.target.id, info);
-                    // const pretty = JSON.stringify(info, null, 2);
-                    // console.log(pretty);
                   }
                   function handleClick(event) {
                     if (event.button === 0) {
@@ -1101,14 +1103,14 @@ console.log("makeSourceLink item =", item);
                "user-select: none;"
                "}\n"))
            (fprintf op ".navigation { position:sticky; top:0; background-color:~a; }\n" bg)
-           (fprintf op ".legend { padding: 8px; font-family: sans-serif; position:fixed; top:1em; right: 0px; text-align:left; width: 30em; height: 60em; overflow-x: auto; overflow-y: auto; background: rgba(255, 255, 255, .9); }\n")
+           (fprintf op ".legend { padding: 8px; font-family: sans-serif; position:fixed; top:1em; right: 0px; text-align:left; width: 30em; height: 20em; overflow-x: auto; overflow-y: auto; background: rgba(255, 255, 255, .9); }\n")
            (fprintf op ".legend ul { padding-left: 2em; margin-top: .5em; }\n")
            (fprintf op ".legend pre { font-size: 8pt; }\n")
            (fprintf op "#filename { font-size: 12pt; }\n")
            (fprintf op ".highlight { background-color: yellow; animation: pulse ~fs ease; }\n" (/ animation-duration 1000))
            (fprintf op "@keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }\n")
            ;; TODO negative margin is a hack to compensate for border
-           (fprintf op ".highlightbinding { background: yellow; border: solid 1px green; margin: -1px; }\n")
+           (fprintf op ".highlightdef { background: yellow; border: solid 1px green; margin: -1px; }\n")
            (fprintf op ".highlightrefs { background: rgba(255, 255, 0, 0.25); border: solid 1px blue; margin: -1px; }\n")
            (fprintf op ".highlightsets { background: rgba(255, 255, 0, 0.25); border: solid 1px red; margin: -1px; }\n")
            (fprintf op ".primsafe { color: #115511; }\n")
