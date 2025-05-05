@@ -767,6 +767,9 @@
                     if (!info) return;
                     event.target.classList.add('highlight');
                     showInfo(event.target.id, info);
+                    const details = document.getElementById('details');
+                    const output = JSON.stringify(info || "No info.", null, 2);
+                    details.innerHTML = `<pre>${encodeHtml(output)}</pre>`;
                   }
                   function handleClick(event) {
                     if (event.button === 0) {
@@ -776,10 +779,6 @@
                       const info = infoDictionary.file_info[event.target.id];
                       pinLegend.checked = !pinLegend.checked;
                       if (!pinLegend.checked) handleMouseOver(event);
-                      const details = document.getElementById('details');
-                      const output = JSON.stringify(info || "No info.", null, 2);
-                      console.log(`Clicked on ${event.target.id}`, output);
-                      details.innerHTML = `<pre>${encodeHtml(output)}</pre>`;
                     }
                   }
                   document.addEventListener('DOMContentLoaded', fetchData);
