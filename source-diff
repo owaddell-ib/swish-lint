@@ -606,12 +606,6 @@
        (define (get-info row) (json:string->object (vector-ref row 2)))
        (define-values (op get) (open-bytevector-output-port (make-utf8-transcoder)))
 
-   
-(printf "LEFT OFF HERE:\n")
-(printf " - realized we might be able to look at the interface-info-export*\n")
-(printf " - those should be linked to identifier-info (or we should be able to)\n")
-(printf " - so we could look for uses of those identifiers with source inside our library\n")
-   
        (fprintf op
          (ct:join #\newline
            "<!DOCTYPE html>"
