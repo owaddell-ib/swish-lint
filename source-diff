@@ -642,10 +642,7 @@
                     return src => {
                       if (!src) return;
                       if (!src.bfp) return;
-                      if (src.sfd.crc != myChecksum && src.sfd.path != myFilename) {
-                         console.log('different file:', src.sfd);  // TODO  handle this
-                         return;
-                      }
+                      if (src.sfd.crc != myChecksum && src.sfd.path != myFilename) return; // handled by links in legend
                       const elt = document.getElementById('bfp'+src.bfp);
                       if (elt) { elt.classList.add('highlight' + field); }
                     }
@@ -684,7 +681,6 @@
                     return hit;
                   }
                   function makeSourceLinkHelp(item, name) {
-console.log("makeSourceLinkHelp item =", item, name);   
                     if (!item.bfp) { return '<span>?</span>'; }
                     if ((item.sfd.crc != myChecksum) || (item.sfd.path != myFilename)) {
                       const encoded = encodeURIComponent(item.sfd.path);
@@ -693,7 +689,6 @@ console.log("makeSourceLinkHelp item =", item, name);
                     return `<span class="internalLink" onClick="scrollToElement('bfp${item.bfp}')">${encodeHtml(name) || item.bfp}</span>`;
                   }
                   function makeSourceLink(item) {
-console.log("makeSourceLink item =", item);   
                     const hit = findObjectWithKey('def', item);
                     if (hit) { // link to imported id
                       const encoded = encodeURIComponent(hit.def.sfd.path);
@@ -739,7 +734,6 @@ console.log("makeSourceLink item =", item);
                     // look for exports of this library / module that we used
                     const where = findObjectWithKey('show_imported', info);
                     if (where.show_imported) {
-                      console.log('found where.show_imported in', where);   
                       const realm = where.show_imported;
                       const ignore = findObjectWithKey('def', info).def;
                       for (const key in infoDictionary.file_info) {
@@ -756,18 +750,12 @@ console.log("makeSourceLink item =", item);
                               (obj.def.bfp != ignore.bfp) && // weed out our own module / library def
                               // exclude references within the module bounds of "show_imported"
                               !(myFilename == realm.sfd.path && realm.bfp <= ref_bfp && ref_bfp <= realm.efp)) {
-                             console.log("---------------v");
-                             console.log(`Maybe hit? ref_bfp=${ref_bfp} realm.bfp=${realm.bfp} realm.efp=${realm.efp} obj.bfp=${obj.def.bfp} vs. where.bfp=${where.show_imported.bfp}, obj.efp=${obj.def.efp} vs. where.efp=${where.show_imported.efp}`);
-                             console.log('myfilename', myFilename);
-                             console.log(JSON.stringify(obj, null, 2));   
-                             console.log("---------------^");
                              exportRefs.push(hit);
                           }
                         }));
                       }
                       if (exportRefs.length > 0) items['export-refs'] = exportRefs;
                     }
-                    console.log(JSON.stringify(items, null, 2));
                     var found = 0;
                     for (const key in items) { found += items[key].length; }
                     legend.innerHTML = (0 == found) ? '' : generateListItems(kind, name, items);
