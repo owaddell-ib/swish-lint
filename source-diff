@@ -754,7 +754,9 @@
                     for (const key in items) { found += items[key].length; }
                     legend.innerHTML = (0 == found) ? '' : generateListItems(kind, name, items);
                   }
+                  var pinLegend = false;
                   function handleMouseOver(event) {
+                    if (pinLegend.checked) return;
                     const info = infoDictionary.file_info[event.target.id];
                     document.querySelectorAll('.highlight').forEach(x => x.classList.remove('highlight'));
                     // TODO horrible
@@ -772,9 +774,12 @@
                       const legend = document.getElementById('legend');
                       if (!legend) return;
                       const info = infoDictionary.file_info[event.target.id];
-                      const output = JSON.stringify(info || "Rats. Nothing.", null, 2);
-                      console.log(`Clicked on ${event.target}`, output);
-                      legend.innerHTML = `<pre>${encodeHtml(output)}</pre>`;
+                      pinLegend.checked = !pinLegend.checked;
+                      if (!pinLegend.checked) handleMouseOver(event);
+                      const details = document.getElementById('details');
+                      const output = JSON.stringify(info || "No info.", null, 2);
+                      console.log(`Clicked on ${event.target.id}`, output);
+                      details.innerHTML = `<pre>${encodeHtml(output)}</pre>`;
                     }
                   }
                   document.addEventListener('DOMContentLoaded', fetchData);
@@ -783,6 +788,7 @@
                       span.addEventListener('mouseover', handleMouseOver);
                       span.addEventListener('click', handleClick);
                     });
+                    pinLegend = document.getElementById('pin-legend');
                     scrollToElement(myTargetBFP);
                   });
                    |#)
@@ -795,8 +801,16 @@
            "<body>"
            "~a"
            "<div class=\"legend\">"
-           "  <div title=\"~a\" id=\"filename\">~a</div>"
+           "  <div id=\"legendheader\">"
+           "    <span title=\"~a\" id=\"filename\">~a</span>"
+           "    <input type=\"checkbox\" id=\"pin-legend\" />"
+           "    <label for=\"pin-legend\"/>Pin legend</label>"
+           "  </div>"
            "  <div id=\"legend\"></div>"
+           "  <details>"
+           "    <summary>details</summary>"
+           "    <div id=\"details\"></div>"
+           "  </details>"
            "</div>"
            "<pre>")
          (html->string (navigation-panel "/source" src obs cm))
@@ -1088,6 +1102,7 @@
            (fprintf op ".legend { padding: 8px; font-family: sans-serif; position:fixed; top:1em; right: 0px; text-align:left; width: 30em; height: 20em; overflow-x: auto; overflow-y: auto; background: rgba(255, 255, 255, .9); }\n")
            (fprintf op ".legend ul { padding-left: 2em; margin-top: .5em; }\n")
            (fprintf op ".legend pre { font-size: 8pt; }\n")
+           (fprintf op "details:has(#detail:empty) { pointer-events: none; opacity: 0.5; }\n")
            (fprintf op "#filename { font-size: 12pt; }\n")
            (fprintf op ".highlight { background-color: yellow; animation: pulse ~fs ease; }\n" (/ animation-duration 1000))
            (fprintf op "@keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }\n")
