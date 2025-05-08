@@ -852,10 +852,28 @@
          (define (get-prim-class info)
            (let ([pinfo (find (lambda (x) (json:ref x 'prim #f)) info)])
              (and pinfo (json:ref pinfo 'mode #f))))
+         (define (unreferenced-binding? info)
+           (let ([hit (find (lambda (x) (json:ref x 'kind #f)) info)])
+             (cond
+              [(not hit) #f]
+              [(json:ref hit 'refs #f) => null?]
+              [else #f])))
+         (define (get-classes info)
+           (remq #f
+             (map (lambda (x)
+                    (let ([kind (json:ref x 'kind #f)]
+                          [refs (json:ref x 'refs #f)])
+                      (and kind
+                           (format "~a_~a" kind
+                             (if refs
+                                 (if (null? refs) "binding_unreferenced" "binding")
+                                 "reference")))))
+               info)))
          (define (start-span counts info)
-           (fprintf op "<span id=\"bfp~a\" class=\"~@[prim~a ~]~{c~a~^ ~}\">"
+           (fprintf op "<span id=\"bfp~a\" class=\"~@[prim~a ~]~{~a~^ ~} ~{c~a~^ ~}\">"
              (car counts)
              (get-prim-class info)
+             (get-classes info)
              counts))
 
          (fprintf op "<table class=\"code\">\n")
@@ -1112,6 +1130,10 @@
            (fprintf op ".primsafe { color: #115511; }\n")
            (fprintf op ".primunsafe { color: #661111; background: rgba(100, 100, 200, .1); }\n")
            (fprintf op ".primsafe { color: #115511; background: rgba(100, 100, 200, .1); }\n")
+           (fprintf op ".lexical_binding { color: #915511; background: rgba(100, 100, 200, .1); }\n")
+           (fprintf op ".lexical_binding_unreferenced { color: #1155f1; background: rgba(100, 100, 200, .1); }\n")
+           (fprintf op ".global_binding { color: #1A5511; background: rgba(100, 100, 200, .1); }\n")
+           (fprintf op ".global_binding_unreferenced { color: #e155e1; background: rgba(100, 100, 200, .1); }\n")
            (fprintf op ".internalLink { text-decoration: underline; }\n")
            (fprintf op ".cov_low { color: #FF0000; }\n")
            (fprintf op ".cov_medium { color: #FF8800; }\n")
