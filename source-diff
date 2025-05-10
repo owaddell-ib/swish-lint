@@ -1000,10 +1000,6 @@
        (let ([src (arg->integer (http:get-param 'src params))]
              [obs (obs->list (http:find-param 'obs params))]
              [cm (or (http:find-param 'cm params) "default")])
-         (match (transaction 'db
-                  (execute "select src_filename from dim_source where src_pk=?" src))
-           [() (not-found conn)]
-           [(#(,filename))
             (match-define (#(,data))
               (transaction 'db
                 (apply execute
@@ -1035,7 +1031,7 @@
                   src
                   obs)))
             (http:respond conn 200 '(("Content-Type" . "text/html"))
-              (string->utf8 data))])))]
+              (string->utf8 data))))]
      [/findsource
       (http:url-handler
        (let ([path (http:get-param 'path params)]
