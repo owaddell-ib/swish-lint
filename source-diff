@@ -674,15 +674,22 @@
                     const ref = findObjectWithKey('def', orig_info);
                     if (ref) {
                       showSource('def')(ref.def);
-                      info = await getNodeInfo(ref.def);
+                      foo = await getNodeInfo(ref.def);
+                      if (foo) info = foo;
                     }
                     const sets = findObjectWithKey('sets', orig_info);
                     if (sets && sets.kind == "global") {
                       showSourceFor(sets, 'sets');
-                      // Can't resort to the hack above where we use def source to lookup the node "info" we need in order
-                      // to show refs / sets.
-                      // Chris's db sauce can handle this (or we could hack here by sloshing more fileinfo over to the browser on demand)
-                      info = await getFirstValidNodeInfo(sets.sets);
+                      // avoid trying to resolve node if we already found it via def
+                      // this keeps us from trying to resolve the node based on (no-source)
+                      // when it's a library export for which we already wired up a 'def'
+                      // (for example highlight spawn&link over in parallel.ss)
+                      // yet we still want to look for things like erlang.ss "self"
+                      // for which we have only global set! and ref
+                      if (info === orig_info) {
+                        foo = await getFirstValidNodeInfo(sets.sets);
+                        if (foo) info = foo;
+                      }
                     }
                     if (!info) { console.log("rats, no info after chasing", id); return; }
                     info.forEach(ls => ls.forEach(si => { showSourceFor(si, 'refs'); showSourceFor(si, 'sets'); }));
