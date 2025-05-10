@@ -668,23 +668,67 @@
                     if (!srcs) return;
                     srcs.forEach(showSource(field));
                   }
-                  function showInfo(id, info) {
-                    const ref = findObjectWithKey('def', info);
+                  // EGREGIOUS HACK; we're calling an async from an event handler
+                  async function showInfo(id, orig_info) {
+                    var info = orig_info;
+                    const ref = findObjectWithKey('def', orig_info);
                     if (ref) {
                       showSource('def')(ref.def);
-                      info = infoDictionary.file_info['bfp'+ref.def.bfp] || info;
+                      info = await getNodeInfo(ref.def);
                     }
+                    const sets = findObjectWithKey('sets', orig_info);
+                    if (sets && sets.kind == "global") {
+                      showSourceFor(sets, 'sets');
+                      // Can't resort to the hack above where we use def source to lookup the node "info" we need in order
+                      // to show refs / sets.
+                      // Chris's db sauce can handle this (or we could hack here by sloshing more fileinfo over to the browser on demand)
+                      info = await getFirstValidNodeInfo(sets.sets);
+                    }
+                    if (!info) { console.log("rats, no info after chasing", id); return; }
                     info.forEach(ls => ls.forEach(si => { showSourceFor(si, 'refs'); showSourceFor(si, 'sets'); }));
+                  }
+                  async function getFirstValidNodeInfo(elements) {
+                    for (const element of elements) {
+                      const info = await getNodeInfo(element);
+                      if (info) return info;
+                    }
+                    return undefined;
+                  }
+                  async function getNodeInfo(src) {
+                    if (!src) return false;
+                    const fileInfo = await getOrFetchFileInfo(src.sfd.path, src.sfd.crc);
+                    return fileInfo['bfp' + src.bfp];
                   }
                   async function fetchData() {
                     try {
                     const reply = await fetch(`/get_data?obs=${myObs}&src=${mySrc}`);
                       if (!reply.ok) { throw new Error('reply was not okay'); }
                       infoDictionary = await reply.json();
+                      installEntry(myFilename, myChecksum, infoDictionary.file_info);
                     } catch (error) {
                       console.log('something went wrong with fetch:', error);
                     }
                   };
+                  var misguidedCache = {};
+                  function installEntry(path, checksum, hit) {
+                    // just clobber things
+                    misguidedCache[path] = {};
+                    misguidedCache[path][checksum] = hit;
+                  }
+                  async function getOrFetchFileInfo(path, checksum) {
+                    const luck = misguidedCache[path] && misguidedCache[path][checksum];
+                    if (luck) return luck;
+                    try {
+                      const reply = await fetch(`/get_file_data?path=${encodeURIComponent(path)}&checksum=${checksum}&obs=${myObs}&src=${mySrc}`);
+                      if (!reply.ok) { throw new Error('reply was not okay'); }
+                      const hit = await reply.json();
+                      installEntry(path, checksum, hit);
+                      return hit; // Return the fetched data
+                    } catch (error) {
+                      console.log('something went wrong with fetch:', error);
+                      return null; // Return null or handle the error as needed
+                    }
+                  }
                   function getFilename(path) {
                     return path.split(/[/\\]/).pop();
                   }
