@@ -1032,6 +1032,37 @@
                   obs)))
             (http:respond conn 200 '(("Content-Type" . "text/html"))
               (string->utf8 data))))]
+     [/get_file_data
+      (http:url-handler
+       (let ([path (http:get-param 'path params)]
+             [checksum (arg->integer (http:get-param 'checksum params))]
+             [obs (obs->list (http:find-param 'obs params))]
+             [cm (or (http:find-param 'cm params) "default")])
+         (match-define (#(,data))
+           (transaction 'db
+             (execute
+              ;; barf, essentially a copy/paste of stuff from get_data
+              (ct:join #\newline
+                "WITH source_data AS ("
+                "    SELECT src_pk"
+                "    FROM dim_source"
+                "    WHERE src_filename = ?"
+                "    AND src_checksum = ?"
+                "),"
+                "profile_data AS ("
+                "    SELECT rng_bfp, json_group_array(json(fp.info)) AS details"
+                "    FROM fact_profile fp"
+                "    INNER JOIN dim_range ON rng_pk = fp.rng_fk"
+                "    WHERE fp.src_fk in (SELECT src_pk FROM source_data)"
+                "    AND fp.obs_fk = 1  --- HACK"
+                "    GROUP BY rng_bfp, rng_efp"
+                "    ORDER BY rng_bfp"
+                ")"
+                "SELECT json_group_object('bfp' || rng_bfp, json(details)) AS file_info"
+                "FROM profile_data;")
+              path checksum)))
+         (http:respond conn 200 '(("Content-Type" . "text/html"))
+           (string->utf8 data))))]
      [/findsource
       (http:url-handler
        (let ([path (http:get-param 'path params)]
