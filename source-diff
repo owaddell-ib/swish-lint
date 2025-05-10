@@ -370,9 +370,8 @@
         (when (source-object? src)
           (let ([cell (source-table-cell st src '())])
             (set-cdr! cell (cons info (cdr cell))))))
-      (define (add-edge edge-type kind name ref-src)
+      (define (add-edge edge-json)
         ;; shared structure here may be hooey; we probably don't leverage it yet
-        (define binding (json:make-object [kind kind] [name name] [,edge-type (maybe-source->json ref-src)]))
         (lambda (use)
           (and use
                (let ([use-src
@@ -381,7 +380,7 @@
                        [(identifier-info? use) (identifier-info-def use)]
                        [(interface-info? use) (interface-info-def use)]
                        [else (errorf #f "can't determine use-src from ~s\n" use)])])
-                 (add-source-info! use-src binding)))))
+                 (add-source-info! use-src edge-json)))))
       ;; TODO important(?) this will get the wrong answer if we use (import (except (foo) bar)) and also use (import (foo))
       ;;      --> it's "wrong" because we currently get the import source for the entire import spec
       ;;      - maybe add-import! should also give us the source for the specific library/module import
@@ -414,19 +413,28 @@
                    [kind kind]
                    [name name]
                    [refs (map maybe-source->json (identifier-info-ref* node))]
-                   [sets (map maybe-source->json (identifier-info-set* node))])])
-            (for-each (add-edge 'def kind name def) (identifier-info-ref* node))
-            (for-each (add-edge 'def kind name def) (identifier-info-set* node))
+                   [sets (map maybe-source->json (identifier-info-set* node))])]
+                 [def-json
+                  (json:make-object
+                   [kind kind]
+                   [name name]
+                   [def (maybe-source->json def)])])
+            (for-each (add-edge def-json) (identifier-info-ref* node))
+            (for-each (add-edge def-json) (identifier-info-set* node))
             (when (eq? 'global (identifier-info-kind node))
-              (for-each (lambda (set) (add-source-info! set json))
-                (identifier-info-set* node)))
+              (for-each (add-edge json) (identifier-info-set* node))
             (when def (add-source-info! def json)))]
          [(interface-info? node)
-          (let ([src (interface-info-src node)]                ;; e.g., source for entire library
-                [def (get-source (interface-info-name node))]  ;; e.g., source for library name
-                [kind (symbol->string (interface-info-kind node))]
-                [name (json-sanitize (interface-info-name node))])
-            (for-each (add-edge 'def kind name def) (interface-info-ref* node))
+          (let* ([src (interface-info-src node)]                ;; e.g., source for entire library
+                 [def (get-source (interface-info-name node))]  ;; e.g., source for library name
+                 [kind (symbol->string (interface-info-kind node))]
+                 [name (json-sanitize (interface-info-name node))]
+                 [def-json
+                   (json:make-object
+                    [kind kind]
+                    [name name]
+                    [def (maybe-source->json def)])])
+            (for-each (add-edge def-json) (interface-info-ref* node))
             (for-each (add-show-imported-query src) (interface-info-ref* node))
             ;; TODO what should we do with interface-info-impreq*
             ;; TODO what should we do with interface-info-export*
