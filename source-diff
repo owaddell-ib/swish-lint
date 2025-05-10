@@ -423,6 +423,12 @@
             (for-each (add-edge def-json) (identifier-info-set* node))
             (when (eq? 'global (identifier-info-kind node))
               (for-each (add-edge json) (identifier-info-set* node))
+              (let ([set-json
+                     (json:make-object
+                      [kind kind]
+                      [name name]
+                      [sets (map maybe-source->json (identifier-info-set* node))])])
+                (for-each (add-edge set-json) (identifier-info-ref* node))))
             (when def (add-source-info! def json)))]
          [(interface-info? node)
           (let* ([src (interface-info-src node)]                ;; e.g., source for entire library
