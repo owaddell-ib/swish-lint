@@ -371,6 +371,7 @@
           (let ([cell (source-table-cell st src '())])
             (set-cdr! cell (cons info (cdr cell))))))
       (define (add-edge edge-type kind name ref-src)
+        ;; shared structure here may be hooey; we probably don't leverage it yet
         (define binding (json:make-object [kind kind] [name name] [,edge-type (maybe-source->json ref-src)]))
         (lambda (use)
           (and use
@@ -402,18 +403,24 @@
         (cond
          [(identifier-info? node) ;; TODO oh boy
           ;; BARF not even close to what we actually want
-          (let ([def (identifier-info-def node)]
-                [kind (symbol->string (identifier-info-kind node))]
-                [name (json-sanitize (identifier-info-name node))])
+          (let* ([def (identifier-info-def node)]
+                 [kind (symbol->string (identifier-info-kind node))]
+                 [name (json-sanitize (identifier-info-name node))]
+                 [json
+                  ;; double down on shared-structure hooey
+                  ;; in theory, Chris will replace all of this with something that does
+                  ;; the db inserts directly
+                  (json:make-object
+                   [kind kind]
+                   [name name]
+                   [refs (map maybe-source->json (identifier-info-ref* node))]
+                   [sets (map maybe-source->json (identifier-info-set* node))])])
             (for-each (add-edge 'def kind name def) (identifier-info-ref* node))
             (for-each (add-edge 'def kind name def) (identifier-info-set* node))
-            (when def
-              (add-source-info! def
-                (json:make-object
-                 [kind kind]
-                 [name name]
-                 [refs (map maybe-source->json (identifier-info-ref* node))]
-                 [sets (map maybe-source->json (identifier-info-set* node))]))))]
+            (when (eq? 'global (identifier-info-kind node))
+              (for-each (lambda (set) (add-source-info! set json))
+                (identifier-info-set* node)))
+            (when def (add-source-info! def json)))]
          [(interface-info? node)
           (let ([src (interface-info-src node)]                ;; e.g., source for entire library
                 [def (get-source (interface-info-name node))]  ;; e.g., source for library name
